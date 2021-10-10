@@ -2,6 +2,7 @@
 import os
 from urllib.parse import quote
 import requests
+from typing import Optional
 
 from argparse import ArgumentParser
 import stat
@@ -27,8 +28,8 @@ class TestFs(pyfuse3.Operations):
     def __init__(self, node_url, root_cap):
         super(TestFs, self).__init__()
         self._node_url = node_url
-        self._inode_to_cap = {pyfuse3.ROOT_INODE: ('dirnode', True, root_cap)}
-        self._cap_to_inode = {root_cap: pyfuse3.ROOT_INODE}
+        self._inode_to_cap_dict = {pyfuse3.ROOT_INODE: root_cap}
+        self._cap_to_inode_dict = {root_cap: pyfuse3.ROOT_INODE}
         self._next_inode = pyfuse3.ROOT_INODE + 1
         self._open_handles = {}
         self.chunk_size = 5*128*1024  # nicely aligned with 5 tahoe 128KiB segments
@@ -36,44 +37,57 @@ class TestFs(pyfuse3.Operations):
     def _create_handle(self, data) -> int:
         for i in range(1000):
             if i not in self._open_handles:
-                break
+                self._open_handles[i] = data
+                return i
 
-        self._open_handles[i] = data
-        return i
+        raise Exception('out of handles')
 
-    def _create_inode_from_json(self, child_json: list) -> int:
-        (node_type, child) = child_json
-        if 'rw_uri' in child:
-            cap = child['rw_uri']
-            mutable = True
-        elif 'ro_uri' in child:
-            cap = child['ro_uri']
-            mutable = False
-        else:
-            raise ValueError(f'child does not contain rw_uri or ro_uri {child=}')
-
-        return self._create_inode(node_type, mutable, cap)
-
-    def _create_inode(self, node_type, mutable, cap) -> int:
-        if cap in self._cap_to_inode:
-            return self._cap_to_inode[cap]
+    def _cap_to_inode(self, cap: str) -> int:
+        if cap in self._cap_to_inode_dict:
+            return self._cap_to_inode_dict[cap]
 
         inode = self._next_inode
         self._next_inode = inode + 1
-        self._inode_to_cap[inode] = (node_type, mutable, cap)
-        self._cap_to_inode[cap] = inode
+        self._inode_to_cap_dict[inode] = cap
+        self._cap_to_inode_dict[cap] = inode
         return inode
 
-    def _getattr(self, inode: int, node_type: str, size: int) -> pyfuse3.EntryAttributes:
-        entry = pyfuse3.EntryAttributes()
-        if node_type == 'dirnode':
-            entry.st_mode = (stat.S_IFDIR | 0o755)
-        elif node_type == 'filenode':
-            entry.st_mode = (stat.S_IFREG | 0o644)
+    def _inode_to_cap(self, inode: int) -> Optional[str]:
+        if inode in self._inode_to_cap_dict:
+            return self._inode_to_cap_dict[inode]
         else:
-            raise ValueError(f'unknown type {node_type=}')
+            return None
 
-        entry.st_size = size
+    def _cap_is_dir(self, cap: str) -> bool:
+        return cap.split(':')[1] in {'DIR2', 'DIR2-MDMF'}
+
+    def _cap_from_child_json(self, json: list) -> str:
+        log.debug(json)
+        json = json[1]
+        return json['rw_uri'] if 'rw_uri' in json else json['ro_uri']
+
+    def _getattr(self, cap: str) -> pyfuse3.EntryAttributes:
+        entry = pyfuse3.EntryAttributes()
+
+        split = cap.split(':')
+        cap_type = split[1]
+        if cap_type == 'DIR2':  # SDMF directory
+            entry.st_mode = (stat.S_IFDIR | 0o755)
+            entry.st_size = 0
+        elif cap_type == 'DIR2-MDMF':  # MDMF directory
+            raise NotImplementedError('MDMF directories not supported')
+        elif cap_type == 'CHK':  # Immutable file
+            entry.st_mode = (stat.S_IFREG | 0o644)
+            entry.st_size = int(split[-1])
+        elif cap_type == 'MDMF' or cap_type == 'MDMF-RO':  # MDMF file
+            entry.st_mode = (stat.S_IFREG | 0o644)
+            r_json = requests.get(self._node_url + '/uri/' + quote(cap), params={'t': 'json'}).json()
+            entry.st_size = int(r_json[1]['size'])
+            print('size:', entry.st_size)
+        elif cap_type == 'SSK' or cap_type == 'SSK-RO':  # SDMF file
+            raise NotImplementedError('SDMF files not supported')
+        else:
+            raise NotImplementedError('cap not supported: ' + cap)
 
         stamp = int(1438467123.985654 * 1e9)
         entry.st_atime_ns = stamp
@@ -81,66 +95,43 @@ class TestFs(pyfuse3.Operations):
         entry.st_mtime_ns = stamp
         entry.st_gid = os.getgid()
         entry.st_uid = os.getuid()
-        entry.st_ino = inode
+        entry.st_ino = self._cap_to_inode(cap)
 
         return entry
 
-    def getattr_json(self, inode, child_json, ctx=None) -> pyfuse3.EntryAttributes:
-        (node_type, info) = child_json
-        if node_type == 'filenode':
-            size = int(info['ro_uri'].split(':')[-1])
-        else:
-            size = 0
-        return self._getattr(inode, node_type, size)
-
     async def getattr(self, inode: int, ctx=None) -> pyfuse3.EntryAttributes:
-        if inode not in self._inode_to_cap:
+        cap = self._inode_to_cap(inode)
+        if not cap:
             raise ValueError(f'{inode=} unknown')
 
-        (node_type, _mutable, cap) = self._inode_to_cap[inode]
+        return self._getattr(cap)
 
-        if node_type == 'filenode':
-            size = int(cap.split(':')[-1])
-        else:
-            size = 0
-
-        return self._getattr(inode, node_type, size)
-
-    async def lookup(self, parent_inode: int, name: bytes, ctx=None) -> pyfuse3.EntryAttributes:
-        if parent_inode not in self._inode_to_cap:
+    async def lookup(self, parent_inode: int, name: bytes, _ctx=None) -> pyfuse3.EntryAttributes:
+        cap = self._inode_to_cap(parent_inode)
+        if not cap:
             raise ValueError(f'{parent_inode=} unknown')
 
-        (node_type, _mutable, cap) = self._inode_to_cap[parent_inode]
-        if node_type == 'filenode':
+        if not self._cap_is_dir(cap):
             raise(pyfuse3.FUSEError(errno.ENOTDIR))
 
         r_json = requests.get(self._node_url + '/uri/' + quote(cap), params={'t': 'json'}).json()
 
-        assert r_json[0] == node_type
-
         name_str: str = name.decode()
-
         for child_name in r_json[1]['children'].keys():
             if child_name == name_str:
-                child_json = r_json[1]['children'][child_name]
-                inode = self._create_inode_from_json(child_json)
-                return self.getattr_json(inode, child_json)
+                child = r_json[1]['children'][child_name]
+                cap = self._cap_from_child_json(child)
+                return self._getattr(cap)
+
 
         raise pyfuse3.FUSEError(errno.ENOENT)
 
-    async def opendir(self, inode, ctx):
-        if inode not in self._inode_to_cap:
-            raise pyfuse3.FUSEError(errno.ENOENT)
+    async def opendir(self, inode, _ctx):
+        cap = self._inode_to_cap(inode)
+        if not cap:
+            raise ValueError(f'{inode=} unknown')
 
-        (_typ, _mutable, cap) = self._inode_to_cap[inode]
         r_json = requests.get(self._node_url + '/uri/' + quote(cap), params={'t': 'json'}).json()
-        nodetype = r_json[0]
-        if nodetype == 'unknown':
-            raise(pyfuse3.FUSEError(errno.ENOENT))
-        elif nodetype == 'filenode':
-            raise(pyfuse3.FUSEError(errno.ENOTDIR))
-        elif nodetype != 'dirnode':
-            raise(ValueError(f'{nodetype=}'))
 
         return self._create_handle(r_json)
 
@@ -153,8 +144,8 @@ class TestFs(pyfuse3.Operations):
         for child_name in children.keys():
             if i >= start_id:
                 child = children[child_name]
-                inode: int = self._create_inode_from_json(child)
-                if not pyfuse3.readdir_reply(token, child_name.encode(), self.getattr_json(inode, child), i+1):
+                cap = self._cap_from_child_json(child)
+                if not pyfuse3.readdir_reply(token, child_name.encode(), self._getattr(cap), i+1):
                     return
             i += 1
 
@@ -163,12 +154,12 @@ class TestFs(pyfuse3.Operations):
     async def releasedir(self, fh: int):
         del self._open_handles[fh]
 
-    async def mkdir(self, parent_inode: int, name: bytes, mode, ctx: pyfuse3.RequestContext) -> pyfuse3.EntryAttributes:
-        if parent_inode not in self._inode_to_cap:
+    async def mkdir(self, parent_inode: int, name: bytes, _mode, _ctx: pyfuse3.RequestContext) -> pyfuse3.EntryAttributes:
+        parent_cap = self._inode_to_cap(parent_inode)
+        if not parent_cap:
             raise ValueError(f'{parent_inode=} unknown')
 
-        (parent_node_type, _parent_mutable, parent_cap) = self._inode_to_cap[parent_inode]
-        if parent_node_type == 'filenode':
+        if not self._cap_is_dir(parent_cap):
             raise(pyfuse3.FUSEError(errno.ENOTDIR))
 
         # Create directory
@@ -179,14 +170,34 @@ class TestFs(pyfuse3.Operations):
                      params={'t': 'uri', 'replace': 'false'},
                      data=cap)
 
-        inode = self._create_inode('dirnode', True, cap)
-        return self._getattr(inode, 'dirnode', 0)
+        return self._getattr(cap)
+
+    async def create(self, parent_inode, name, mode, rdev, ctx) -> pyfuse3.EntryAttributes:
+        log.debug('create')
+        if mode & stat.S_IFREG == stat.S_IFREG:
+            parent_cap = self._inode_to_cap(parent_inode)
+            if not parent_cap:
+                raise ValueError(f'{parent_inode=} unknown')
+
+            if not self._cap_is_dir(parent_cap):
+                raise(pyfuse3.FUSEError(errno.ENOTDIR))
+
+            # Create file
+            cap = requests.put(self._node_url + '/uri/' + quote(parent_cap) + '/' + quote(name.decode()),
+                                params={'format': 'MDMF'}).text
+
+            data = (cap, {})  # second element in tuple is for chunk cache
+            fh = self._create_handle(data)
+            log.debug('open fh %s (create)', fh)
+            return pyfuse3.FileInfo(fh=fh), self._getattr(cap)
+        else:
+            raise NotImplementedError('unsupported mode: ' + mode)
 
     async def open(self, inode, _flags, _ctx):
         # if flags & os.O_RDWR or flags & os.O_WRONLY:
         #     raise pyfuse3.FUSEError(errno.EACCES)
-        (node_type, _mutable, cap) = self._inode_to_cap[inode]
-        assert node_type == 'filenode'
+        cap = self._inode_to_cap(inode)
+        assert cap
         data = (cap, {})  # second element in tuple is for chunk cache
         fh = self._create_handle(data)
         log.debug('open fh %s', fh)
@@ -214,6 +225,21 @@ class TestFs(pyfuse3.Operations):
         data_off = off % self.chunk_size
         return data[data_off:data_off+size]
 
+    async def write(self, fh, off, buf):
+        start_chunk = off // self.chunk_size
+        end_chunk = (off + len(buf)) // self.chunk_size
+        log.debug('write off=%s size=%s (to %s)', off, len(buf), off + len(buf))
+        (cap, cache) = self._open_handles[fh]
+        for chunk_index in range(start_chunk, end_chunk + 1):
+            # ideally we should update the local cache instead of destroying it
+            if chunk_index in cache:
+                del cache[chunk_index]
+
+        r = requests.put(self._node_url + '/uri/' + quote(cap), params={'offset': off}, data=buf)
+        if r.status_code != 200:
+            log.warning(r.text)
+        return len(buf)
+
     async def release(self, fh: int):
         log.debug('release fh %s', fh)
         del self._open_handles[fh]
@@ -235,7 +261,7 @@ def init_logging(debug=False):
 
 
 def parse_args():
-    '''Parse command line'''
+    """Parse command line"""
 
     parser = ArgumentParser()
 
@@ -266,7 +292,7 @@ def main():
     try:
         trio.run(pyfuse3.main)
     except:
-        pyfuse3.close(unmount=False)
+        pyfuse3.close(unmount=True)
         raise
 
     pyfuse3.close()
