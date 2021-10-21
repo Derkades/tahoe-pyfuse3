@@ -32,7 +32,12 @@ class TestFs(pyfuse3.Operations):
         self._cap_to_inode_dict = {root_cap: pyfuse3.ROOT_INODE}
         self._next_inode = pyfuse3.ROOT_INODE + 1
         self._open_handles = {}
-        self.chunk_size = 5*128*1024  # nicely aligned with 5 tahoe 128KiB segments
+        self.chunk_size = 5*128*1024  # nicely aligned with tahoe 128KiB segments
+
+        try:
+            self._find_cap_in_parent(pyfuse3.ROOT_INODE, None)
+        except pyfuse3.FUSEError:
+            pass
 
     def _create_handle(self, data) -> int:
         for i in range(1000):
@@ -66,8 +71,27 @@ class TestFs(pyfuse3.Operations):
         json = json[1]
         return json['rw_uri'] if 'rw_uri' in json else json['ro_uri']
 
+    def _find_cap_in_parent(self, parent_inode: int, name: str) -> str:
+        cap = self._inode_to_cap(parent_inode)
+        if not cap:
+            raise ValueError(f'{parent_inode=} unknown')
+
+        if not self._cap_is_dir(cap):
+            raise(pyfuse3.FUSEError(errno.ENOTDIR))
+
+        r_json = requests.get(self._node_url + '/uri/' + quote(cap), params={'t': 'json'}).json()
+
+        for child_name in r_json[1]['children'].keys():
+            if child_name == name:
+                child = r_json[1]['children'][child_name]
+                return self._cap_from_child_json(child)
+
+        raise pyfuse3.FUSEError(errno.ENOENT)
+
     def _getattr(self, cap: str) -> pyfuse3.EntryAttributes:
         entry = pyfuse3.EntryAttributes()
+
+        # TODO support LIT https://tahoe-lafs.readthedocs.io/en/latest/specifications/uri.html?highlight=URI%3ALIT#lit-uris
 
         split = cap.split(':')
         cap_type = split[1]
@@ -107,24 +131,9 @@ class TestFs(pyfuse3.Operations):
         return self._getattr(cap)
 
     async def lookup(self, parent_inode: int, name: bytes, _ctx=None) -> pyfuse3.EntryAttributes:
+        cap: str = self._find_cap_in_parent(parent_inode, name.decode())
         cap = self._inode_to_cap(parent_inode)
-        if not cap:
-            raise ValueError(f'{parent_inode=} unknown')
-
-        if not self._cap_is_dir(cap):
-            raise(pyfuse3.FUSEError(errno.ENOTDIR))
-
-        r_json = requests.get(self._node_url + '/uri/' + quote(cap), params={'t': 'json'}).json()
-
-        name_str: str = name.decode()
-        for child_name in r_json[1]['children'].keys():
-            if child_name == name_str:
-                child = r_json[1]['children'][child_name]
-                cap = self._cap_from_child_json(child)
-                return self._getattr(cap)
-
-
-        raise pyfuse3.FUSEError(errno.ENOENT)
+        return self._getattr(cap)
 
     async def opendir(self, inode, _ctx):
         cap = self._inode_to_cap(inode)
@@ -184,7 +193,7 @@ class TestFs(pyfuse3.Operations):
 
             # Create file
             cap = requests.put(self._node_url + '/uri/' + quote(parent_cap) + '/' + quote(name.decode()),
-                                params={'format': 'MDMF'}).text
+                               params={'format': 'MDMF'}).text
 
             data = (cap, {})  # second element in tuple is for chunk cache
             fh = self._create_handle(data)
@@ -203,7 +212,7 @@ class TestFs(pyfuse3.Operations):
         log.debug('open fh %s', fh)
         return pyfuse3.FileInfo(fh=fh)
 
-    async def read(self, fh, off, size):
+    async def read(self, fh: int, off: int, size: int):
         start_chunk = off // self.chunk_size
         end_chunk = (off + size) // self.chunk_size
         log.debug('read off=%s size=%s (to %s) start_chunk=%s end_chunk=%s', off, size, off+size, start_chunk, end_chunk)
@@ -225,7 +234,7 @@ class TestFs(pyfuse3.Operations):
         data_off = off % self.chunk_size
         return data[data_off:data_off+size]
 
-    async def write(self, fh, off, buf):
+    async def write(self, fh: int, off: int, buf: bytes):
         start_chunk = off // self.chunk_size
         end_chunk = (off + len(buf)) // self.chunk_size
         log.debug('write off=%s size=%s (to %s)', off, len(buf), off + len(buf))
@@ -235,7 +244,10 @@ class TestFs(pyfuse3.Operations):
             if chunk_index in cache:
                 del cache[chunk_index]
 
-        r = requests.put(self._node_url + '/uri/' + quote(cap), params={'offset': off}, data=buf)
+        params = {}
+        if off > 0:
+            params['offset'] = off
+        r = requests.put(self._node_url + '/uri/' + quote(cap), params=params, data=buf)
         if r.status_code != 200:
             log.warning(r.text)
         return len(buf)
@@ -243,6 +255,14 @@ class TestFs(pyfuse3.Operations):
     async def release(self, fh: int):
         log.debug('release fh %s', fh)
         del self._open_handles[fh]
+
+    async def unlink(self, parent_inode: int, name: bytes, ctx: pyfuse3.RequestContext()):
+        # cap = self._find_cap_in_parent(parent_inode, name.decode())
+        print('cap get')
+        cap = self._inode_to_cap(parent_inode)
+        print('cap', cap)
+        r = requests.delete(f'{self._node_url}/uri/{quote(cap)}/{quote(name.decode())}')
+        assert r.status_code == 200
 
 
 def init_logging(debug=False):
