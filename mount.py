@@ -121,6 +121,8 @@ class TestFs(pyfuse3.Operations):
         entry.st_gid = os.getgid()
         entry.st_uid = os.getuid()
         entry.st_ino = self._cap_to_inode(cap)
+        entry.st_blksize = 512
+        entry.st_blocks = -(-entry.st_size // entry.st_blksize)  # ceil division
 
         return entry
 
