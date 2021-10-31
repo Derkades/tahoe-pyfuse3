@@ -45,10 +45,10 @@ def main(path: Path, api: str, cap: str, level=0):
                 print(log_prefix, sub, 'uploading...')
                 with open(sub, 'rb') as f:
                     r = requests.put(f'{api}/uri/{quote(cap)}/{quote(name)}?format=CHK', data=f)
-                    if r.status_code == 200:
+                    if r.status_code == 201:
                         print(log_prefix, sub, 'done!')
                     else:
-                        print('upload error')
+                        print('upload error', r.status_code)
                         print(r.text)
                         exit(1)
             else:
