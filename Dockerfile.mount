@@ -1,0 +1,11 @@
+FROM python:3.9
+
+RUN pip3 install requests
+
+RUN apt-get update && \
+    apt-get install -y libfuse3-dev
+RUN pip3 install pyfuse3
+
+COPY mount.py .
+
+ENTRYPOINT ["python3", "mount.py"]
