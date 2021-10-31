@@ -25,14 +25,15 @@ log = logging.getLogger(__name__)
 
 class TestFs(pyfuse3.Operations):
 
-    def __init__(self, node_url, root_cap):
+    def __init__(self, node_url, root_cap, read_only):
         super(TestFs, self).__init__()
         self._node_url = node_url
         self._inode_to_cap_dict = {pyfuse3.ROOT_INODE: root_cap}
         self._cap_to_inode_dict = {root_cap: pyfuse3.ROOT_INODE}
         self._next_inode = pyfuse3.ROOT_INODE + 1
         self._open_handles = {}
-        self.chunk_size = 5*128*1024  # nicely aligned with tahoe 128KiB segments
+        self._chunk_size = 5*128*1024  # nicely aligned with tahoe 128KiB segments
+        self.read_only = read_only
 
         try:
             self._find_cap_in_parent(pyfuse3.ROOT_INODE, None)
@@ -164,6 +165,9 @@ class TestFs(pyfuse3.Operations):
         del self._open_handles[fh]
 
     async def mkdir(self, parent_inode: int, name: bytes, _mode, _ctx: pyfuse3.RequestContext) -> pyfuse3.EntryAttributes:
+        if self.read_only:
+            raise pyfuse3.FUSEError(errno.EROFS)
+
         parent_cap = self._inode_to_cap(parent_inode)
         if not parent_cap:
             raise ValueError(f'{parent_inode=} unknown')
@@ -182,6 +186,9 @@ class TestFs(pyfuse3.Operations):
         return self._getattr(cap)
 
     async def create(self, parent_inode, name, mode, rdev, ctx) -> pyfuse3.EntryAttributes:
+        if self.read_only:
+            raise pyfuse3.FUSEError(errno.EROFS)
+
         log.debug('create')
         if mode & stat.S_IFREG == stat.S_IFREG:
             parent_cap = self._inode_to_cap(parent_inode)
@@ -213,8 +220,8 @@ class TestFs(pyfuse3.Operations):
         return pyfuse3.FileInfo(fh=fh)
 
     async def read(self, fh: int, off: int, size: int):
-        start_chunk = off // self.chunk_size
-        end_chunk = (off + size) // self.chunk_size
+        start_chunk = off // self._chunk_size
+        end_chunk = (off + size) // self._chunk_size
         log.debug('read off=%s size=%s (to %s) start_chunk=%s end_chunk=%s', off, size, off+size, start_chunk, end_chunk)
         (cap, cache) = self._open_handles[fh]
         data = b''
@@ -226,17 +233,20 @@ class TestFs(pyfuse3.Operations):
                 data += cache[chunk_index]
             else:
                 log.debug('not cached')
-                r_start = chunk_index * self.chunk_size
-                r_end = r_start + self.chunk_size - 1  # tahoe doesn't care if this is beyond the end of the file
+                r_start = chunk_index * self._chunk_size
+                r_end = r_start + self._chunk_size - 1  # tahoe doesn't care if this is beyond the end of the file
                 chunk_data = requests.get(self._node_url + '/uri/' + quote(cap), headers={'Range': f'bytes={r_start}-{r_end}'}).content
                 cache[chunk_index] = chunk_data
                 data += chunk_data
-        data_off = off % self.chunk_size
+        data_off = off % self._chunk_size
         return data[data_off:data_off+size]
 
     async def write(self, fh: int, off: int, buf: bytes):
-        start_chunk = off // self.chunk_size
-        end_chunk = (off + len(buf)) // self.chunk_size
+        if self.read_only:
+            raise pyfuse3.FUSEError(errno.EROFS)
+
+        start_chunk = off // self._chunk_size
+        end_chunk = (off + len(buf)) // self._chunk_size
         log.debug('write off=%s size=%s (to %s)', off, len(buf), off + len(buf))
         (cap, cache) = self._open_handles[fh]
         for chunk_index in range(start_chunk, end_chunk + 1):
@@ -244,9 +254,7 @@ class TestFs(pyfuse3.Operations):
             if chunk_index in cache:
                 del cache[chunk_index]
 
-        params = {}
-        if off > 0:
-            params['offset'] = off
+        params = {'offset': off}
         r = requests.put(self._node_url + '/uri/' + quote(cap), params=params, data=buf)
         if r.status_code != 200:
             log.warning(r.text)
@@ -257,6 +265,9 @@ class TestFs(pyfuse3.Operations):
         del self._open_handles[fh]
 
     async def unlink(self, parent_inode: int, name: bytes, ctx: pyfuse3.RequestContext()):
+        if self.read_only:
+            raise pyfuse3.FUSEError(errno.EROFS)
+
         # cap = self._find_cap_in_parent(parent_inode, name.decode())
         print('cap get')
         cap = self._inode_to_cap(parent_inode)
@@ -295,6 +306,8 @@ def parse_args():
                         help='Enable debugging output')
     parser.add_argument('--debug-fuse', action='store_true', default=False,
                         help='Enable FUSE debugging output')
+    parser.add_argument('--read-only', default=False,
+                        help='Don\'t allow writing to, modifying, deleting or creating files or directories.')
     return parser.parse_args()
 
 
@@ -302,7 +315,7 @@ def main():
     options = parse_args()
     init_logging(options.debug)
 
-    testfs = TestFs(options.node_url, options.root_cap)
+    testfs = TestFs(options.node_url, options.root_cap, options.read_only)
     fuse_options = set(pyfuse3.default_options)
     fuse_options.add('fsname=hello')
     fuse_options.add('allow_other')
