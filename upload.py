@@ -44,8 +44,13 @@ def main(path: Path, api: str, cap: str, level=0):
             elif r.status_code == 404:
                 print(log_prefix, sub, 'uploading...')
                 with open(sub, 'rb') as f:
-                    requests.put(f'{api}/uri/{quote(cap)}/{quote(name)}?format=CHK', data=f)
-                print(log_prefix, sub, 'done!')
+                    r = requests.put(f'{api}/uri/{quote(cap)}/{quote(name)}?format=CHK', data=f)
+                    if r.status_code == 200:
+                        print(log_prefix, sub, 'done!')
+                    else:
+                        print('upload error')
+                        print(r.text)
+                        exit(1)
             else:
                 print(log_prefix, 'unexpected status code', r.status_code)
                 exit(1)
