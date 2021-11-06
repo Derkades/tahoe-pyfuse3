@@ -9,7 +9,7 @@ def upload_file(path: Path, api: str, parent_cap: str, log_prefix: str):
     with open(path, 'rb') as f:
         r = requests.put(f'{api}/uri/{quote(parent_cap)}/{quote(path.name)}?format=CHK', data=f)
         if r.status_code == 201:
-            print(log_prefix, sub, 'done!')
+            print(log_prefix, path, 'done!')
         else:
             print(r.text)
             raise Exception('Failed to upload file')
@@ -65,12 +65,12 @@ def upload_dir(path: Path, api: str, parent_cap: str, log_prefix: str, level: in
     else:
         raise Exception('Unexpected status code ' + r.status_code)
 
-    print(log_prefix, parent_path, 'uploading contents....')
+    print(log_prefix, path, 'uploading contents....')
     upload_contents(parent_path=path, api=api, parent_cap=cap, level=level+1)
-    print(log_prefix, parent_path, 'done!')
+    print(log_prefix, path, 'done!')
 
 
-def upload_contents(parent_path: Path, api: str, level: int):
+def upload_contents(parent_path: Path, api: str, parent_cap: str, level: int):
     log_prefix = '    ' * level
     for path in parent_path.iterdir():
         if path.is_file():
@@ -79,13 +79,13 @@ def upload_contents(parent_path: Path, api: str, level: int):
             upload_dir(path, api, parent_cap, log_prefix, level)
         else:
             print(log_prefix, path, "skipping, unknown file type")
-    
 
-def main(path: Path, api: str, cap: str, contents_only: bool):
-    if contents_only:
-        upload_contents(parent_path=path, api=api, parent_cap=cap, level=0)
-    else:
+
+def main(path: Path, api: str, cap: str, create_parent: bool):
+    if create_parent:
         upload_dir(path=path, api=api, parent_cap=cap, log_prefix='', level=0)
+    else:
+        upload_contents(parent_path=path, api=api, parent_cap=cap, level=0)
 
 
 if __name__ == "__main__":
@@ -93,10 +93,8 @@ if __name__ == "__main__":
     parser.add_argument('path', type=str, help='Path to file or directory to upload')
     parser.add_argument('api', type=str, help='HTTP REST API URL of a Tahoe-LAFS node')
     parser.add_argument('cap', type=str, help='Tahoe directory capability where files should be uploaded to')
-    parser.add_argument('contents-only', type=bool, 
-                        help='When set to true, only the directory\'s contents will be '
-                             'stored. When set to false, the directory itself will be uploaded.')
-
+    parser.add_argument('--create-parent', default=False, action='store_true',
+                        help='When specified, create a directory in the specified tahoe cap')
     args = parser.parse_args()
 
-    main(path=Path(args.path), api=args.api, cap=args.cap, contents_only=args.contents_only)
+    main(path=Path(args.path), api=args.api, cap=args.cap, create_parent=args.create_parent)
