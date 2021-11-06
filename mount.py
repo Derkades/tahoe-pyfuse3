@@ -135,7 +135,6 @@ class TestFs(pyfuse3.Operations):
 
     async def lookup(self, parent_inode: int, name: bytes, _ctx=None) -> pyfuse3.EntryAttributes:
         cap: str = self._find_cap_in_parent(parent_inode, name.decode())
-        cap = self._inode_to_cap(parent_inode)
         return self._getattr(cap)
 
     async def opendir(self, inode, _ctx):
@@ -152,6 +151,7 @@ class TestFs(pyfuse3.Operations):
             raise ValueError(f'file handle is not open? {fh=}')
 
         children: dict = self._open_handles[fh][1]['children']
+
         i = 0
         for child_name in children.keys():
             if i >= start_id:
