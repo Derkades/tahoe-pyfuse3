@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
 import os
-from urllib.parse import quote
 import requests
+import threading
+import logging
 from typing import Optional
+from urllib.parse import quote
 
 from argparse import ArgumentParser
-import stat
-import logging
 import errno
 import pyfuse3
 import trio
+import stat
 
 
 try:
@@ -32,6 +33,8 @@ class TestFs(pyfuse3.Operations):
         self._cap_to_inode_dict = {root_cap: pyfuse3.ROOT_INODE}
         self._next_inode = pyfuse3.ROOT_INODE + 1
         self._open_handles = {}
+        self._inode_lock = threading.Lock()
+        self._fh_lock = threading.Lock()
         self._chunk_size = 5*128*1024  # nicely aligned with tahoe 128KiB segments
         self.read_only = read_only
 
@@ -41,28 +44,31 @@ class TestFs(pyfuse3.Operations):
             pass
 
     def _create_handle(self, data) -> int:
-        for i in range(1000):
-            if i not in self._open_handles:
-                self._open_handles[i] = data
-                return i
+        with self._fh_lock():
+            for i in range(1000):
+                if i not in self._open_handles:
+                    self._open_handles[i] = data
+                    return i
 
-        raise Exception('out of handles')
+            raise Exception('out of handles')
 
     def _cap_to_inode(self, cap: str) -> int:
-        if cap in self._cap_to_inode_dict:
-            return self._cap_to_inode_dict[cap]
+        with self._inode_lock:
+            if cap in self._cap_to_inode_dict:
+                return self._cap_to_inode_dict[cap]
 
-        inode = self._next_inode
-        self._next_inode = inode + 1
-        self._inode_to_cap_dict[inode] = cap
-        self._cap_to_inode_dict[cap] = inode
-        return inode
+            inode = self._next_inode
+            self._next_inode = inode + 1
+            self._inode_to_cap_dict[inode] = cap
+            self._cap_to_inode_dict[cap] = inode
+            return inode
 
     def _inode_to_cap(self, inode: int) -> Optional[str]:
-        if inode in self._inode_to_cap_dict:
-            return self._inode_to_cap_dict[inode]
-        else:
-            return None
+        with self._inode_lock:
+            if inode in self._inode_to_cap_dict:
+                return self._inode_to_cap_dict[inode]
+            else:
+                return None
 
     def _cap_is_dir(self, cap: str) -> bool:
         return cap.split(':')[1] in {'DIR2', 'DIR2-MDMF'}
@@ -211,6 +217,32 @@ class TestFs(pyfuse3.Operations):
         else:
             raise NotImplementedError('unsupported mode: ' + mode)
 
+    async def move(self, old_inode_p: int, old_name: str, new_inode_p: int, new_name: str, flags, ctx: pyfuse3.RequestContext):
+        if flags & pyfuse3.RENAME_EXCHANGE == pyfuse3.RENAME_EXCHANGE:
+            raise pyfuse3.FUSEError(errno.ENOTSUP)
+
+        if flags & pyfuse3.RENAME_NOREPLACE == pyfuse3.RENAME_NOREPLACE:
+            replace_mode = 'false'
+        else:
+            replace_mode = 'only-files'
+
+        old_pcap = self._inode_to_cap(old_inode_p)
+        new_pcap = self._inode_to_cap(new_inode_p)
+        assert old_pcap
+        assert new_pcap
+
+        r = requests.post(self._node_url + '/uri/' + quote(old_pcap) + '/?=relink'
+                          '&from_name=' + quote(old_name) + \
+                          '&to_dir=' + quote(new_pcap) + \
+                          '&to_name=' + quote(new_name) + \
+                          '&replace=' + replace_mode)
+
+        if r.status_code == 409:
+            raise pyfuse3.FUSEError(errno.EEXIST)
+         
+        if r.status_code != 200:
+            raise Exception('Unexpected response code ' + r.status_code)
+
     async def open(self, inode, _flags, _ctx):
         # if flags & os.O_RDWR or flags & os.O_WRONLY:
         #     raise pyfuse3.FUSEError(errno.EACCES)
@@ -246,6 +278,8 @@ class TestFs(pyfuse3.Operations):
     async def write(self, fh: int, off: int, buf: bytes):
         if self.read_only:
             raise pyfuse3.FUSEError(errno.EROFS)
+
+        raise pyfuse3.FUSEError(errno.ENOTSUP)
 
         start_chunk = off // self._chunk_size
         end_chunk = (off + len(buf)) // self._chunk_size
