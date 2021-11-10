@@ -24,10 +24,14 @@ else:
 log = logging.getLogger(__name__)
 
 
-class TestFs(pyfuse3.Operations):
+class TahoeFs(pyfuse3.Operations):
 
     def __init__(self, node_url, root_cap, read_only):
-        super(TestFs, self).__init__()
+        super(TahoeFs, self).__init__()
+        self.supports_dot_lookup = False  # maybe it does?
+        self.enable_writeback_cache = False
+        self.enable_acl = False
+        
         self._node_url = node_url
         self._inode_to_cap_dict = {pyfuse3.ROOT_INODE: root_cap}
         self._cap_to_inode_dict = {root_cap: pyfuse3.ROOT_INODE}
@@ -193,7 +197,7 @@ class TestFs(pyfuse3.Operations):
 
         return self._getattr(cap)
 
-    async def create(self, parent_inode, name, mode, rdev, ctx) -> pyfuse3.EntryAttributes:
+    async def create(self, parent_inode, name, _mode, flags, ctx) -> pyfuse3.EntryAttributes:
         if self.read_only:
             raise pyfuse3.FUSEError(errno.EROFS)
 
@@ -210,10 +214,9 @@ class TestFs(pyfuse3.Operations):
             cap = requests.put(self._node_url + '/uri/' + quote(parent_cap) + '/' + quote(name.decode()),
                                params={'format': 'MDMF'}).text
 
-            data = (cap, {})  # second element in tuple is for chunk cache
-            fh = self._create_handle(data)
-            log.debug('open fh %s (create)', fh)
-            return pyfuse3.FileInfo(fh=fh), self._getattr(cap)
+            inode = self._cap_to_inode(cap)
+            fi = self.open(inode, flags, ctx)
+            return fi, self._getattr(cap)
         else:
             raise NotImplementedError('unsupported mode: ' + mode)
 
@@ -243,9 +246,11 @@ class TestFs(pyfuse3.Operations):
         if r.status_code != 200:
             raise Exception('Unexpected response code ' + r.status_code)
 
-    async def open(self, inode, _flags, _ctx):
-        # if flags & os.O_RDWR or flags & os.O_WRONLY:
-        #     raise pyfuse3.FUSEError(errno.EACCES)
+    async def open(self, inode, flags, _ctx):
+        if flags & os.O_TRUNC == os.O_TRUNC:
+            if not self.read_only:
+                raise Exception('Truncate not supported')
+        
         cap = self._inode_to_cap(inode)
         assert cap
         data = (cap, {})  # second element in tuple is for chunk cache
@@ -351,9 +356,9 @@ def main():
     options = parse_args()
     init_logging(options.debug)
 
-    testfs = TestFs(options.node_url, options.root_cap, options.read_only)
+    testfs = TahoeFs(options.node_url, options.root_cap, options.read_only)
     fuse_options = set(pyfuse3.default_options)
-    fuse_options.add('fsname=hello')
+    fuse_options.add('fsname=tahoe')
     fuse_options.add('allow_other')
     if options.debug_fuse:
         fuse_options.add('debug')
