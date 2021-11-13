@@ -328,10 +328,7 @@ class TahoeFs(pyfuse3.Operations):
         if self.read_only:
             raise pyfuse3.FUSEError(errno.EROFS)
 
-        # cap = self._find_cap_in_parent(parent_inode, name.decode())
-        print('cap get')
         cap = self._inode_to_cap(parent_inode)
-        print('cap', cap)
         r = requests.delete(f'{self._node_url}/uri/{quote(cap)}/{quote(name.decode())}')
         assert r.status_code == 200
 
