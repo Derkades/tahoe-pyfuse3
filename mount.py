@@ -39,7 +39,7 @@ class TahoeFs(pyfuse3.Operations):
         self._open_handles = {}
         self._inode_lock = threading.Lock()
         self._fh_lock = threading.Lock()
-        self._chunk_size = 2*128*1024  # nicely aligned with tahoe 128KiB segments
+        self._chunk_size = 5*128*1024  # nicely aligned with tahoe 128KiB segments
         self.read_only = read_only
 
         try:
@@ -258,6 +258,20 @@ class TahoeFs(pyfuse3.Operations):
         log.debug('open fh %s', fh)
         return pyfuse3.FileInfo(fh=fh)
 
+    def _download_range(self, cap: str, start: int, end: int):
+        r = requests.get(self._node_url + '/uri/' + quote(cap),
+                         headers={
+                             'Range': f'bytes={start}-{end-1}'
+                         })
+        if r.status_code == 416:
+            log.warning('cap %s was read beyond the end of the file at offset %s', cap, start)
+            return b''
+
+        if r.status_code not in {200, 206}:
+            raise Exception('unexpected status code ' + str(r.status_code))
+
+        return r.content
+
     async def read(self, fh: int, off: int, size: int):
         (cap, cache) = self._open_handles[fh]
         if size >= 32_768:
@@ -275,20 +289,15 @@ class TahoeFs(pyfuse3.Operations):
                 else:
                     log.debug('not cached')
                     r_start = chunk_index * self._chunk_size
-                    r_end = r_start + self._chunk_size - 1  # tahoe doesn't care if this is beyond the end of the file
-                    r = requests.get(self._node_url + '/uri/' + quote(cap),
-                                     headers={'Range': f'bytes={r_start}-{r_end}'})
-                    assert r.status_code in {200, 206}
-                    chunk_data = r.content
+                    r_end = r_start + self._chunk_size  # tahoe doesn't care if this is beyond the end of the file
+                    chunk_data = self._download_range(cap, r_start, r_end)
                     cache[chunk_index] = chunk_data
                     data += chunk_data
             data_off = off % self._chunk_size
             return data[data_off:data_off+size]
         else:
             print('don\'t use chunk cache')
-            r = requests.get(self._node_url + '/uri/' + quote(cap), headers={'Range': f'bytes={off}-{off+size-1}'})
-            assert r.status_code in {200, 206}
-            return r.content
+            return self._download_range(cap, off, off+size)
 
     async def write(self, fh: int, off: int, buf: bytes):
         if self.read_only:
