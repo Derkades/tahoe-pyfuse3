@@ -5,69 +5,76 @@ from pathlib import Path
 from argparse import ArgumentParser
 
 
-def upload_file(path: Path, api: str, parent_cap: str, log_prefix: str):
+def upload_file(path: Path, api: str, parent_cap: str):
     with open(path, 'rb') as f:
         r = requests.put(f'{api}/uri/{quote(parent_cap)}/{quote(path.name)}?format=CHK', data=f)
         if r.status_code == 201:
-            print(log_prefix + path, 'done!')
+            print('done!')
         else:
             print(r.text)
-            raise Exception('Failed to upload file ' + path)
+            print('Failed to upload file ' + str(path))
+            exit(1)
 
 
 def check_upload_file(path: Path, api: str, parent_cap: str, log_prefix: str):
     # check if a file or directory with this name already exists
+    print(log_prefix + path.name, end=': ')
     r = requests.get(f'{api}/uri/{quote(parent_cap)}/{quote(path.name)}?t=json')
     if r.status_code == 200:
-        print(log_prefix + path, 'already exists')
+        print('already exists, ', end='', flush=True)
         json = r.json()
 
         if json[0] == 'filenode':
             if json[1]['format'] == 'CHK':
                 if json[1]['size'] == path.stat().st_size:
-                    print(log_prefix + path, 'same size, skipping')
+                    print('same size',)
                     return
                 else:
-                    print(log_prefix + path, 'different size')
+                    print('different size', end=' ', flush=True)
             else:
-                print(log_prefix + path, 'different format', json[1]['format'])
+                print('different format', json[1]['format'], end=' ', flush=True)
         else:
-            print(log_prefix + path, 'unexpected node type (probably a directory)')
+            print('unexpected node type (probably a directory)', end=' ', flush=True)
 
-        print(log_prefix + path, 'deleting...')
+        print('deleting...', end=' ', flush=True)
         r = requests.delete(f'{api}/uri/{quote(parent_cap)}/{quote(path.name)}')
         assert r.status_code == 200
-        print(log_prefix + path, 're-uploading...')
-        upload_file(path, )
+        print('re-uploading...', end=' ', flush=True)
+        upload_file(path, api, parent_cap)
     elif r.status_code == 404:
-        print(log_prefix + path, 'uploading...')
-        upload_file(path, api, parent_cap, log_prefix)
+        print('uploading...', end=' ', flush=True)
+        upload_file(path, api, parent_cap)
     else:
-        raise Exception('Unexpected status code ' + r.status_code)
+        print(r.text)
+        print('Unexpected status code ' + str(r.status_code))
+        exit(1)
 
 
 def upload_dir(path: Path, api: str, parent_cap: str, log_prefix: str):
+    print(log_prefix + path.name, end=': ')
     r = requests.get(f'{api}/uri/{quote(parent_cap)}/{quote(path.name)}?t=json')
     if r.status_code == 200:
         json = r.json()
         if json[0] != 'dirnode':
-            print(log_prefix + path, 'not a directory in tahoe filesystem!')
+            print('not a directory in tahoe filesystem!')
+            exit(1)
         else:
             cap = json[1]['rw_uri']
             cap_type = cap.split(':')[1]
             assert cap_type == 'DIR2'
-            print(log_prefix + path, 'already exists', cap)
+            print('already exists, ', end='', flush=True)
     elif r.status_code == 404:
-        print(log_prefix + path, 'creating directory...')
+        print('creating directory...', end=' ', flush=True)
         r = requests.post(f'{api}/uri/{quote(parent_cap)}/{quote(path.name)}?t=mkdir')
         cap = r.text
-        print(log_prefix + path, 'created', cap)
+        print('created,', end=' ', flush=True)
     else:
-        raise Exception('Unexpected status code ' + r.status_code)
+        print(r.text)
+        print('Unexpected status code ' + str(r.status_code))
+        exit(1)
 
-    print(log_prefix + path, 'uploading contents....')
+    print('uploading contents....')
     upload_contents(parent_path=path, api=api, parent_cap=cap, log_prefix=(log_prefix + '    '))
-    print(log_prefix + path, 'done!')
 
 
 def upload_contents(parent_path: Path, api: str, parent_cap: str, log_prefix: str):
@@ -75,9 +82,9 @@ def upload_contents(parent_path: Path, api: str, parent_cap: str, log_prefix: st
         if path.is_file():
             check_upload_file(path, api, parent_cap, log_prefix)
         elif path.is_dir():
-            upload_dir(path, api, parent_cap, log_prefix, level)
+            upload_dir(path, api, parent_cap, log_prefix)
         else:
-            print(log_prefix + path, "skipping, unknown file type")
+            print(log_prefix + path.name, "skipping, unknown file type")
 
 
 def main(path_str: str, api: str, cap: str):
