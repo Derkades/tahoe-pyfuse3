@@ -75,7 +75,7 @@ The upload script will never move/delete/create/modify local files/directories.
 usage: upload.py [-h] path api cap
 
 positional arguments:
-  path        Path to file or directory to upload
+  path        Path to file or directory to upload. Like rsync, add a trailing slash to upload directory contents, no trailing slash to upload the directory itself.
   api         HTTP REST API URL of a Tahoe-LAFS node
   cap         Tahoe directory capability where files should be uploaded to
 
