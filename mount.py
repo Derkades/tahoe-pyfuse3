@@ -31,7 +31,7 @@ class TahoeFs(pyfuse3.Operations):
         self.supports_dot_lookup = False  # maybe it does?
         self.enable_writeback_cache = False
         self.enable_acl = False
-        
+
         self._node_url = node_url
         self._inode_to_cap_dict = {pyfuse3.ROOT_INODE: root_cap}
         self._cap_to_inode_dict = {root_cap: pyfuse3.ROOT_INODE}
@@ -39,7 +39,7 @@ class TahoeFs(pyfuse3.Operations):
         self._open_handles = {}
         self._inode_lock = threading.Lock()
         self._fh_lock = threading.Lock()
-        self._chunk_size = 5*128*1024  # nicely aligned with tahoe 128KiB segments
+        self._chunk_size = 2*128*1024  # nicely aligned with tahoe 128KiB segments
         self.read_only = read_only
 
         try:
@@ -48,7 +48,7 @@ class TahoeFs(pyfuse3.Operations):
             pass
 
     def _create_handle(self, data) -> int:
-        with self._fh_lock():
+        with self._fh_lock:
             for i in range(1000):
                 if i not in self._open_handles:
                     self._open_handles[i] = data
@@ -242,7 +242,7 @@ class TahoeFs(pyfuse3.Operations):
 
         if r.status_code == 409:
             raise pyfuse3.FUSEError(errno.EEXIST)
-         
+
         if r.status_code != 200:
             raise Exception('Unexpected response code ' + r.status_code)
 
@@ -250,7 +250,7 @@ class TahoeFs(pyfuse3.Operations):
         if flags & os.O_TRUNC == os.O_TRUNC:
             if not self.read_only:
                 raise Exception('Truncate not supported')
-        
+
         cap = self._inode_to_cap(inode)
         assert cap
         data = (cap, {})  # second element in tuple is for chunk cache
@@ -259,26 +259,36 @@ class TahoeFs(pyfuse3.Operations):
         return pyfuse3.FileInfo(fh=fh)
 
     async def read(self, fh: int, off: int, size: int):
-        start_chunk = off // self._chunk_size
-        end_chunk = (off + size) // self._chunk_size
-        log.debug('read off=%s size=%s (to %s) start_chunk=%s end_chunk=%s', off, size, off+size, start_chunk, end_chunk)
         (cap, cache) = self._open_handles[fh]
-        data = b''
-        # in almost all cases, this for loop will only run for one iteration (usually chunk size is larger than read size)
-        for chunk_index in range(start_chunk, end_chunk + 1):
-            log.debug('chunk index %s', chunk_index)
-            if chunk_index in cache:
-                log.debug('cached')
-                data += cache[chunk_index]
-            else:
-                log.debug('not cached')
-                r_start = chunk_index * self._chunk_size
-                r_end = r_start + self._chunk_size - 1  # tahoe doesn't care if this is beyond the end of the file
-                chunk_data = requests.get(self._node_url + '/uri/' + quote(cap), headers={'Range': f'bytes={r_start}-{r_end}'}).content
-                cache[chunk_index] = chunk_data
-                data += chunk_data
-        data_off = off % self._chunk_size
-        return data[data_off:data_off+size]
+        if size >= 32_768:
+            print(f'use chunk cache (amplification {self._chunk_size // size})')
+            start_chunk = off // self._chunk_size
+            end_chunk = (off + size) // self._chunk_size
+            log.debug('read off=%s size=%s (to %s) start_chunk=%s end_chunk=%s', off, size, off+size, start_chunk, end_chunk)
+            data = b''
+            # in almost all cases, this for loop will only run for one iteration (usually chunk size is larger than read size)
+            for chunk_index in range(start_chunk, end_chunk + 1):
+                log.debug('chunk index %s', chunk_index)
+                if chunk_index in cache:
+                    log.debug('cached')
+                    data += cache[chunk_index]
+                else:
+                    log.debug('not cached')
+                    r_start = chunk_index * self._chunk_size
+                    r_end = r_start + self._chunk_size - 1  # tahoe doesn't care if this is beyond the end of the file
+                    r = requests.get(self._node_url + '/uri/' + quote(cap),
+                                     headers={'Range': f'bytes={r_start}-{r_end}'})
+                    assert r.status_code in {200, 206}
+                    chunk_data = r.content
+                    cache[chunk_index] = chunk_data
+                    data += chunk_data
+            data_off = off % self._chunk_size
+            return data[data_off:data_off+size]
+        else:
+            print('don\'t use chunk cache')
+            r = requests.get(self._node_url + '/uri/' + quote(cap), headers={'Range': f'bytes={off}-{off+size-1}'})
+            assert r.status_code in {200, 206}
+            return r.content
 
     async def write(self, fh: int, off: int, buf: bytes):
         if self.read_only:
