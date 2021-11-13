@@ -31,12 +31,13 @@ def upload_file(path: Path, file_size: int, api: str, parent_cap: str, log_prefi
                        unit_scale=True,
                        unit_divisor=1024) as bar:
         r = requests.put(f'{api}/uri/{quote(parent_cap)}/{quote(path.name)}?format=CHK', data=file_reader(f, bar))
-        if r.status_code == 201:
-            print(log_prefix + path, 'done!')
-        else:
-            print(r.text)
-            print('Failed to upload file ' + str(path))
-            exit(1)
+
+    if r.status_code == 201:
+        print(log_prefix + path.name, 'done!')
+    else:
+        print(r.text)
+        print('Failed to upload file ' + str(path))
+        exit(1)
 
 
 def check_upload_file(path: Path, api: str, parent_cap: str, log_prefix: str):
