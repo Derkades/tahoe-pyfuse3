@@ -3,13 +3,36 @@ import requests
 from urllib.parse import quote
 from pathlib import Path
 from argparse import ArgumentParser
+from tqdm import tqdm
 
 
-def upload_file(path: Path, api: str, parent_cap: str):
-    with open(path, 'rb') as f:
-        r = requests.put(f'{api}/uri/{quote(parent_cap)}/{quote(path.name)}?format=CHK', data=f)
+# TODO make configurable through command flags
+UPLOAD_BLOCK_SIZE = 512*1024
+UPLOAD_PROGRESS_UNIT = 'bytes'
+assert UPLOAD_BLOCK_SIZE > 0
+assert UPLOAD_PROGRESS_UNIT in {'bytes', 'bits'}
+
+
+def file_reader(f, bar):
+    while True:
+        data = f.read(UPLOAD_BLOCK_SIZE)
+        if data:
+            yield data
+            bar.update(len(data) * (8 if UPLOAD_PROGRESS_UNIT == 'bits' else 1))
+        else:
+            break
+
+
+def upload_file(path: Path, file_size: int, api: str, parent_cap: str, log_prefix: str):
+    with open(path, 'rb') \
+            as f, tqdm(desc=(log_prefix + path.name),
+                       total=file_size * (8 if UPLOAD_PROGRESS_UNIT == 'bits' else 1),
+                       unit='iB' if UPLOAD_PROGRESS_UNIT == 'bytes' else 'ib',
+                       unit_scale=True,
+                       unit_divisor=1024) as bar:
+        r = requests.put(f'{api}/uri/{quote(parent_cap)}/{quote(path.name)}?format=CHK', data=file_reader(f, bar))
         if r.status_code == 201:
-            print('done!')
+            print(log_prefix + path, 'done!')
         else:
             print(r.text)
             print('Failed to upload file ' + str(path))
@@ -26,7 +49,8 @@ def check_upload_file(path: Path, api: str, parent_cap: str, log_prefix: str):
 
         if json[0] == 'filenode':
             if json[1]['format'] == 'CHK':
-                if json[1]['size'] == path.stat().st_size:
+                file_size = path.stat().st_size
+                if json[1]['size'] == file_size:
                     print('same size',)
                     return
                 else:
@@ -39,11 +63,11 @@ def check_upload_file(path: Path, api: str, parent_cap: str, log_prefix: str):
         print('deleting...', end=' ', flush=True)
         r = requests.delete(f'{api}/uri/{quote(parent_cap)}/{quote(path.name)}')
         assert r.status_code == 200
-        print('re-uploading...', end=' ', flush=True)
-        upload_file(path, api, parent_cap)
+        print('re-uploading...')
+        upload_file(path, file_size, api, parent_cap, log_prefix)
     elif r.status_code == 404:
-        print('uploading...', end=' ', flush=True)
-        upload_file(path, api, parent_cap)
+        print('uploading...')
+        upload_file(path, path.stat().st_size, api, parent_cap, log_prefix)
     else:
         print(r.text)
         print('Unexpected status code ' + str(r.status_code))
