@@ -30,7 +30,9 @@ def upload_file(path: Path, file_size: int, api: str, parent_cap: str, log_prefi
                        unit='iB' if UPLOAD_PROGRESS_UNIT == 'bytes' else 'ib',
                        unit_scale=True,
                        unit_divisor=1024) as bar:
-        r = requests.put(f'{api}/uri/{quote(parent_cap)}/{quote(path.name)}?format=CHK', data=file_reader(f, bar))
+        r = requests.put(f'{api}/uri/{quote(parent_cap)}/{quote(path.name)}?format=CHK',
+                         data=file_reader(f, bar),
+                         headers={'Accept': 'text/plain'})
 
     if r.status_code == 201:
         print(log_prefix + path.name, 'done!')
@@ -43,7 +45,8 @@ def upload_file(path: Path, file_size: int, api: str, parent_cap: str, log_prefi
 def check_upload_file(path: Path, api: str, parent_cap: str, log_prefix: str):
     # check if a file or directory with this name already exists
     print(log_prefix + path.name, end=': ')
-    r = requests.get(f'{api}/uri/{quote(parent_cap)}/{quote(path.name)}?t=json')
+    r = requests.get(f'{api}/uri/{quote(parent_cap)}/{quote(path.name)}?t=json',
+                     headers={'Accept': 'text/plain'})
     if r.status_code == 200:
         print('already exists, ', end='', flush=True)
         json = r.json()
@@ -62,8 +65,12 @@ def check_upload_file(path: Path, api: str, parent_cap: str, log_prefix: str):
             print('unexpected node type (probably a directory)', end=' ', flush=True)
 
         print('deleting...', end=' ', flush=True)
-        r = requests.delete(f'{api}/uri/{quote(parent_cap)}/{quote(path.name)}')
-        assert r.status_code == 200
+        r = requests.delete(f'{api}/uri/{quote(parent_cap)}/{quote(path.name)}',
+                            headers={'Accept': 'text/plain'})
+        if r.status_code != 200:
+            print('unexpected status code', r.status_code)
+            print(r.text)
+            exit(1)
         print('re-uploading...')
         upload_file(path, file_size, api, parent_cap, log_prefix)
     elif r.status_code == 404:
@@ -77,7 +84,8 @@ def check_upload_file(path: Path, api: str, parent_cap: str, log_prefix: str):
 
 def upload_dir(path: Path, api: str, parent_cap: str, log_prefix: str):
     print(log_prefix + path.name, end=': ')
-    r = requests.get(f'{api}/uri/{quote(parent_cap)}/{quote(path.name)}?t=json')
+    r = requests.get(f'{api}/uri/{quote(parent_cap)}/{quote(path.name)}?t=json',
+                     headers={'Accept': 'text/plain'})
     if r.status_code == 200:
         json = r.json()
         if json[0] != 'dirnode':
@@ -90,7 +98,8 @@ def upload_dir(path: Path, api: str, parent_cap: str, log_prefix: str):
             print('already exists, ', end='', flush=True)
     elif r.status_code == 404:
         print('creating directory...', end=' ', flush=True)
-        r = requests.post(f'{api}/uri/{quote(parent_cap)}/{quote(path.name)}?t=mkdir')
+        r = requests.post(f'{api}/uri/{quote(parent_cap)}/{quote(path.name)}?t=mkdir',
+                          headers={'Accept': 'text/plain'})
         cap = r.text
         print('created,', end=' ', flush=True)
     else:
