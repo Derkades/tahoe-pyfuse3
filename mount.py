@@ -3,6 +3,7 @@ import os
 import requests
 import threading
 import logging
+import base64
 from typing import Optional, List
 from urllib.parse import quote
 
@@ -99,6 +100,11 @@ class TahoeFs(pyfuse3.Operations):
 
         raise pyfuse3.FUSEError(errno.ENOENT)
 
+    def _decode_lit(self, cap: str) -> bytes:
+        content_b32 = cap.split(':')[2]
+        actually_b32 = content_b32.upper() + '=' * ((8 - (len(content_b32) % 8)) % 8)
+        return base64.b32decode(actually_b32)
+
     def _getattr(self, cap: str) -> pyfuse3.EntryAttributes:
         entry = pyfuse3.EntryAttributes()
 
@@ -112,15 +118,17 @@ class TahoeFs(pyfuse3.Operations):
         elif cap_type == 'DIR2-MDMF':  # MDMF directory
             raise NotImplementedError('MDMF directories not supported')
         elif cap_type == 'CHK':  # Immutable file
-            entry.st_mode = (stat.S_IFREG | 0o644)
+            entry.st_mode = (stat.S_IFREG | 0o444)
             entry.st_size = int(split[-1])
         elif cap_type == 'MDMF' or cap_type == 'MDMF-RO':  # MDMF file
             entry.st_mode = (stat.S_IFREG | 0o644)
             r_json = requests.get(self._node_url + '/uri/' + quote(cap), params={'t': 'json'}).json()
             entry.st_size = int(r_json[1]['size'])
-            print('size:', entry.st_size)
         elif cap_type == 'SSK' or cap_type == 'SSK-RO':  # SDMF file
             raise NotImplementedError('SDMF files not supported')
+        elif cap_type == 'LIT':
+            entry.st_mode = (stat.S_IFREG | 0o444)
+            entry.st_size = len(self._decode_lit(cap))
         else:
             raise NotImplementedError('cap not supported: ' + cap)
 
@@ -310,46 +318,55 @@ class TahoeFs(pyfuse3.Operations):
 
     async def read(self, fh: int, off: int, size: int) -> bytes:
         (cap, cache) = self._open_handles[fh]
-        log.debug('read off=%skiB, size=%skiB', off // 1024, size // 1024)
-        if size >= 65536:
-            prefetch_blocks = 2
-            if size >= 131072:
-                prefetch_blocks = 5
-            if size >= 262144:
-                prefetch_blocks = 15
 
-            # chunks we actually need to read
-            r_start_chunk = off // self._chunk_size
-            r_end_chunk = (off + size) // self._chunk_size
+        cap_type = cap.split(':')[1]
 
-            # chunks we want to cache
-            c_start_chunk = r_start_chunk
-            prefetch_count = prefetch_blocks - r_end_chunk % prefetch_blocks
-            c_end_chunk = r_end_chunk + prefetch_count
-            log.debug('use chunk cache with start=%s, end=%s, chunks=%s, prefetch_blocks=%s, prefetch_count=%s, total_size=%skiB',
-                      c_start_chunk,
-                      c_end_chunk,
-                      c_end_chunk - c_start_chunk + 1,
-                      prefetch_blocks,
-                      prefetch_count,
-                      ((c_end_chunk - c_start_chunk + 1) * self._chunk_size) // 1024)
+        if cap_type == 'LIT':
+            data = self._decode_lit(cap)
+            return data[off:off+size]
+        elif cap_type in {'CHK', 'MDMF', 'MDMF-RO', 'SSK', 'SSK-RO'}:
+            log.debug('read off=%skiB, size=%skiB', off // 1024, size // 1024)
+            if size >= 65536:
+                prefetch_blocks = 2
+                if size >= 131072:
+                    prefetch_blocks = 5
+                if size >= 262144:
+                    prefetch_blocks = 15
 
-            c_chunks = range(c_start_chunk, c_end_chunk+1)
-            chunks_to_download = [i for i in c_chunks if i not in cache]
-            log.debug('all chunks %s, chunks to download: %s', list(c_chunks), chunks_to_download)
-            self._cache_chunks(cap, cache, chunks_to_download)
+                # chunks we actually need to read
+                r_start_chunk = off // self._chunk_size
+                r_end_chunk = (off + size) // self._chunk_size
 
-            # now that all data has been downloaded and cached, return the data we were asked for
+                # chunks we want to cache
+                c_start_chunk = r_start_chunk
+                prefetch_count = prefetch_blocks - r_end_chunk % prefetch_blocks
+                c_end_chunk = r_end_chunk + prefetch_count
+                log.debug('use chunk cache with start=%s, end=%s, chunks=%s, prefetch_blocks=%s, prefetch_count=%s, total_size=%skiB',
+                        c_start_chunk,
+                        c_end_chunk,
+                        c_end_chunk - c_start_chunk + 1,
+                        prefetch_blocks,
+                        prefetch_count,
+                        ((c_end_chunk - c_start_chunk + 1) * self._chunk_size) // 1024)
 
-            data = b''
-            for chunk_index in range(r_start_chunk, r_end_chunk+1):
-                log.debug('getting chunk %s from cache', chunk_index)
-                data += cache[chunk_index]
-            data_off = off % self._chunk_size
-            return data[data_off:data_off+size]
+                c_chunks = range(c_start_chunk, c_end_chunk+1)
+                chunks_to_download = [i for i in c_chunks if i not in cache]
+                log.debug('all chunks %s, chunks to download: %s', list(c_chunks), chunks_to_download)
+                self._cache_chunks(cap, cache, chunks_to_download)
+
+                # now that all data has been downloaded and cached, return the data we were asked for
+
+                data = b''
+                for chunk_index in range(r_start_chunk, r_end_chunk+1):
+                    log.debug('getting chunk %s from cache', chunk_index)
+                    data += cache[chunk_index]
+                data_off = off % self._chunk_size
+                return data[data_off:data_off+size]
+            else:
+                log.debug('don\'t use chunk cache')
+                return self._download_range(cap, off, off+size)
         else:
-            log.debug('don\'t use chunk cache')
-            return self._download_range(cap, off, off+size)
+            raise NotImplementedError("cap not supported: " + cap)
 
     async def write(self, fh: int, off: int, buf: bytes) -> int:
         if self.read_only:
