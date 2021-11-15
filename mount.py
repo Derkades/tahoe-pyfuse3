@@ -41,6 +41,7 @@ class TahoeFs(pyfuse3.Operations):
         self._inode_lock = threading.Lock()
         self._fh_lock = threading.Lock()
         self._chunk_size = 2*128*1024  # nicely aligned with tahoe 128KiB segments
+        self._max_cached_chunks = 256*1024*1024 // self._chunk_size  # 256MiB
         self.read_only = read_only
 
         try:
@@ -327,11 +328,13 @@ class TahoeFs(pyfuse3.Operations):
         elif cap_type in {'CHK', 'MDMF', 'MDMF-RO', 'SSK', 'SSK-RO'}:
             log.debug('read off=%skiB, size=%skiB', off // 1024, size // 1024)
             if size >= 65536:
-                prefetch_blocks = 2
+                prefetch_blocks = 1
                 if size >= 131072:
-                    prefetch_blocks = 5
+                    prefetch_blocks = 2
                 if size >= 262144:
-                    prefetch_blocks = 15
+                    prefetch_blocks = 4
+                if size >= 524288:
+                    prefetch_blocks = 8
 
                 # chunks we actually need to read
                 r_start_chunk = off // self._chunk_size
@@ -342,12 +345,12 @@ class TahoeFs(pyfuse3.Operations):
                 prefetch_count = prefetch_blocks - r_end_chunk % prefetch_blocks
                 c_end_chunk = r_end_chunk + prefetch_count
                 log.debug('use chunk cache with start=%s, end=%s, chunks=%s, prefetch_blocks=%s, prefetch_count=%s, total_size=%skiB',
-                        c_start_chunk,
-                        c_end_chunk,
-                        c_end_chunk - c_start_chunk + 1,
-                        prefetch_blocks,
-                        prefetch_count,
-                        ((c_end_chunk - c_start_chunk + 1) * self._chunk_size) // 1024)
+                          c_start_chunk,
+                          c_end_chunk,
+                          c_end_chunk - c_start_chunk + 1,
+                          prefetch_blocks,
+                          prefetch_count,
+                          ((c_end_chunk - c_start_chunk + 1) * self._chunk_size) // 1024)
 
                 c_chunks = range(c_start_chunk, c_end_chunk+1)
                 chunks_to_download = [i for i in c_chunks if i not in cache]
@@ -360,6 +363,11 @@ class TahoeFs(pyfuse3.Operations):
                 for chunk_index in range(r_start_chunk, r_end_chunk+1):
                     log.debug('getting chunk %s from cache', chunk_index)
                     data += cache[chunk_index]
+
+                if len(cache) > self._max_cached_chunks:
+                    log.debug('chunk cache has surpassed max size, clearing cached chunks')
+                    cache.clear()
+
                 data_off = off % self._chunk_size
                 return data[data_off:data_off+size]
             else:
