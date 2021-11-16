@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
 import os
-import requests
 import threading
 import logging
 import base64
+import json
 from typing import Optional, List
-from urllib.parse import quote
+from urllib.parse import urlparse, quote
+import urllib3
+from urllib3.exceptions import HTTPError
 
 from argparse import ArgumentParser
 import errno
 import pyfuse3
+from pyfuse3 import FUSEError
 import trio
 import stat
 
@@ -43,6 +46,25 @@ class TahoeFs(pyfuse3.Operations):
         self._chunk_size = 2*128*1024  # nicely aligned with tahoe 128KiB segments
         self._max_cached_chunks = 256*1024*1024 // self._chunk_size  # 256MiB
         self.read_only = read_only
+        
+        self._common_headers = {
+            'User-Agent': 'tahoe-mount',
+            'Accept': 'text/plain'
+        }
+        
+        parsed_url = urlparse(node_url)
+        if parsed_url.scheme == 'http':
+            port = parsed_url.port if parsed_url.port is not None else 80
+            self._pool = urllib3.HTTPConnectionPool(parsed_url.hostname, 
+                                                    port, 
+                                                    headers=self._common_headers, 
+                                                    retries=5)
+        elif parsed_url.scheme == 'https':
+            port = parsed_url.port if parsed_url.port is not None else 443
+            self._pool = urllib3.HTTPSConnectionPool(parsed_url.hostname, 
+                                                     parsed_url.port, 
+                                                     headers=self._common_headers, 
+                                                     retries=5)
 
         try:
             self._find_cap_in_parent(pyfuse3.ROOT_INODE, None)
@@ -91,15 +113,22 @@ class TahoeFs(pyfuse3.Operations):
 
         if not self._cap_is_dir(cap):
             raise(pyfuse3.FUSEError(errno.ENOTDIR))
-
-        r_json = requests.get(self._node_url + '/uri/' + quote(cap), params={'t': 'json'}).json()
+        
+        r = self._pool.request('GET',
+                               '/uri/' + quote(cap) + '/?t=json')
+        
+        if r.status != 200:
+            log.warning('unexpected status code %s _find_cap_in_parent() GET request', r.status)
+            raise FUSEError(errno.EREMOTEIO)
+                
+        r_json = json.loads(r.data.decode())
 
         for child_name in r_json[1]['children'].keys():
             if child_name == name:
                 child = r_json[1]['children'][child_name]
                 return self._cap_from_child_json(child)
 
-        raise pyfuse3.FUSEError(errno.ENOENT)
+        raise FUSEError(errno.ENOENT)
 
     def _decode_lit(self, cap: str) -> bytes:
         content_b32 = cap.split(':')[2]
@@ -108,8 +137,6 @@ class TahoeFs(pyfuse3.Operations):
 
     def _getattr(self, cap: str) -> pyfuse3.EntryAttributes:
         entry = pyfuse3.EntryAttributes()
-
-        # TODO support LIT https://tahoe-lafs.readthedocs.io/en/latest/specifications/uri.html?highlight=URI%3ALIT#lit-uris
 
         split = cap.split(':')
         cap_type = split[1]
@@ -123,7 +150,12 @@ class TahoeFs(pyfuse3.Operations):
             entry.st_size = int(split[-1])
         elif cap_type == 'MDMF' or cap_type == 'MDMF-RO':  # MDMF file
             entry.st_mode = (stat.S_IFREG | 0o644)
-            r_json = requests.get(self._node_url + '/uri/' + quote(cap), params={'t': 'json'}).json()
+            r = self._pool.request('GET',
+                                   '/uri/' + quote(cap) + '/?t=json')
+            if r.status != 200:
+                log.warning('unexpected status code %s _getattr() MDMF(-RO) GET request', r.status)
+                raise FUSEError(errno.EREMOTEIO)
+            r_json = json.loads(r.data.decode())
             entry.st_size = int(r_json[1]['size'])
         elif cap_type == 'SSK' or cap_type == 'SSK-RO':  # SDMF file
             raise NotImplementedError('SDMF files not supported')
@@ -161,7 +193,12 @@ class TahoeFs(pyfuse3.Operations):
         if not cap:
             raise ValueError(f'{inode=} unknown')
 
-        r_json = requests.get(self._node_url + '/uri/' + quote(cap), params={'t': 'json'}).json()
+        r = self._pool.request('GET',
+                               '/uri/' + quote(cap) + '/?t=json')
+        if r.status != 200:
+            log.warning('unexpected status code %s opendir() GET request: %s', r.status, r.data)
+            raise FUSEError(errno.EREMOTEIO)
+        r_json = json.loads(r.data.decode())
 
         return self._create_handle(r_json)
 
@@ -197,13 +234,21 @@ class TahoeFs(pyfuse3.Operations):
             raise(pyfuse3.FUSEError(errno.ENOTDIR))
 
         # Create directory
-        cap = requests.post(self._node_url + '/uri', params={'t': 'mkdir', 'format': 'SDMF'}).text
+        r = self._pool.request('POST',
+                               '/uri?t=mkdir&format=SDMF')
+        if r.status != 201:
+            log.warning('unexpected status code %s opendir() POST request: %s', r.status, r.data)
+            raise FUSEError(errno.EREMOTEIO)
+        cap = r.data.decode()
 
         # Link directory
-        requests.put(self._node_url + '/uri/' + quote(parent_cap) + '/' + quote(name.decode()),
-                     params={'t': 'uri', 'replace': 'false'},
-                     data=cap)
-
+        r = self._pool.request('PUT',
+                               '/uri/' + quote(parent_cap) + '/' + quote(name.decode()),
+                               body=cap)
+        if r.status != 201:
+            log.warning('unexpected status code %s opendir() GET request: %s', r.status, r.data)
+            raise FUSEError(errno.EREMOTEIO)
+        
         return self._getattr(cap)
 
     async def create(self, parent_inode, name, _mode, flags, ctx) -> pyfuse3.EntryAttributes:
@@ -219,9 +264,16 @@ class TahoeFs(pyfuse3.Operations):
             if not self._cap_is_dir(parent_cap):
                 raise(pyfuse3.FUSEError(errno.ENOTDIR))
 
-            # Create file
-            cap = requests.put(self._node_url + '/uri/' + quote(parent_cap) + '/' + quote(name.decode()),
-                               params={'format': 'MDMF'}).text
+            try:
+                r = self._pool.request('PUT', 
+                                        '/uri/' + quote(parent_cap) + '/' + quote(name.decode()) + "?format=MDMF")
+                if r.status != 201:
+                    log.warning('unexpected status code %s create() PUT request', r.status)
+                    raise FUSEError(errno.EREMOTEIO)
+                cap = r.data.decode()
+            except HTTPError as e:
+                log.warning('error during PUT request for create(): %s', e)
+                raise FUSEError(errno.EREMOTEIO)
 
             inode = self._cap_to_inode(cap)
             fi = self.open(inode, flags, ctx)
@@ -242,18 +294,20 @@ class TahoeFs(pyfuse3.Operations):
         new_pcap = self._inode_to_cap(new_inode_p)
         assert old_pcap
         assert new_pcap
+        
+        r = self._pool.request('POST',
+                               '/uri' + quote(old_pcap) + '/?=relink'
+                               '&from_name=' + quote(old_name) + \
+                               '&to_dir=' + quote(new_pcap) + \
+                               '&to_name=' + quote(new_name) + \
+                               '&replace=' + replace_mode)
 
-        r = requests.post(self._node_url + '/uri/' + quote(old_pcap) + '/?=relink'
-                          '&from_name=' + quote(old_name) + \
-                          '&to_dir=' + quote(new_pcap) + \
-                          '&to_name=' + quote(new_name) + \
-                          '&replace=' + replace_mode)
-
-        if r.status_code == 409:
+        if r.status == 409:
             raise pyfuse3.FUSEError(errno.EEXIST)
 
-        if r.status_code != 200:
-            raise Exception('Unexpected response code ' + r.status_code)
+        if r.status != 200:
+            log.warning('unexpected status code %s move() POST request', r.status)
+            raise FUSEError(errno.EREMOTEIO)
 
     async def open(self, inode, flags, _ctx):
         if flags & os.O_TRUNC == os.O_TRUNC:
@@ -268,15 +322,18 @@ class TahoeFs(pyfuse3.Operations):
         return pyfuse3.FileInfo(fh=fh)
 
     def _download_range(self, cap: str, start: int, end_excl: int) -> bytes:
-        r = requests.get(self._node_url + '/uri/' + quote(cap),
-                         headers={
-                             'Range': f'bytes={start}-{end_excl - 1}'
-                         })
-        if r.status_code == 416:
+        r = self._pool.request('GET',
+                               '/uri/' + quote(cap),
+                               headers = {
+                                   **self._common_headers,
+                                   'Range': f'bytes={start}-{end_excl - 1}'
+                               })
+        
+        if r.status == 416:
             log.warning('cap %s was read beyond the end of the file at offset %s', cap, start)
             return b''
 
-        if r.status_code not in {200, 206}:
+        if r.status not in {200, 206}:
             raise Exception('unexpected status code ' + str(r.status_code))
 
         return r.content
@@ -391,10 +448,13 @@ class TahoeFs(pyfuse3.Operations):
             if chunk_index in cache:
                 del cache[chunk_index]
 
-        params = {'offset': off}
-        r = requests.put(self._node_url + '/uri/' + quote(cap), params=params, data=buf)
-        if r.status_code != 200:
-            log.warning(r.text)
+        r = self._pool.request('PUT',
+                               '/uri/' + quote(cap) + '?offset=' + str(off),
+                               body=data)
+        if r.status != 200:
+            log.warning('unexpected status code %s write() PUT request', r.status)
+            raise FUSEError(errno.EREMOTEIO)
+        
         return len(buf)
 
     async def release(self, fh: int):
@@ -405,9 +465,12 @@ class TahoeFs(pyfuse3.Operations):
         if self.read_only:
             raise pyfuse3.FUSEError(errno.EROFS)
 
-        cap = self._inode_to_cap(parent_inode)
-        r = requests.delete(f'{self._node_url}/uri/{quote(cap)}/{quote(name.decode())}')
-        assert r.status_code == 200
+        pcap = self._inode_to_cap(parent_inode)
+        r = self._pool.request('DELETE',
+                               '/uri/' + quote(pcap) + '/' + quote(name.decode()))
+        if r.status != 200:
+            log.warning('unexpected status code %s unlink() DELETE request', r.status)
+            raise FUSEError(errno.EREMOTEIO)
 
 
 def init_logging(debug=False):
