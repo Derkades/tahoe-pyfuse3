@@ -1,5 +1,23 @@
 # tahoe-pyfuse3
 
+## Installation
+
+### Native python
+
+Install dependencies (debian):
+```
+apt install python3 python3-urllib3 python3-pyfuse3 python3-tqdm
+```
+
+Run `python3 mount.py` or `python3 upload.py`
+
+### Docker
+
+Images `derkades/tahoe-mount` and `derkades/tahoe-upload` are available on Docker Hub. You can also build them locally using `./build-docker.sh`
+
+### Static executables
+Run `./build-static.sh` (uses Docker so it doesn't litter your system with crap) and you'll find executables in `./build`.
+
 ## Mount client
 
 ### Features
@@ -82,21 +100,3 @@ Example:
 ```
 python3 upload.py /some/dir http://localhost:3456 URI:DIR2:fzwyukltbehjx37nuyp6wy2qge:lzzg3oy2okmfcblquvoyp7qtq6xge2ptge6srogn56hbn7ckhgra
 ```
-
-## Installation
-
-### Native python
-
-Install dependencies (debian):
-```
-apt install python3 python3-urllib3 python3-pyfuse3 python3-tqdm
-```
-
-Run `python3 mount.py` or `python3 upload.py`
-
-### Docker
-
-Images `derkades/tahoe-mount` and `derkades/tahoe-upload` are available on Docker Hub. You can also build them locally using `./build-docker.sh`
-
-### Static executables
-Run `./build-static.sh` (uses Docker so it doesn't litter your system with crap) and you'll find executables in `./build`.
