@@ -1,11 +1,21 @@
-FROM python:3.9
+FROM python:3.9-bullseye AS builder
 
-RUN pip3 install urllib3
+RUN apt-get update
 
-RUN apt-get update && \
-    apt-get install -y libfuse3-dev
-RUN pip3 install pyfuse3
+RUN pip install pyinstaller
 
-COPY mount.py .
+RUN apt-get install -y libfuse3-dev
+RUN pip install pyfuse3 urllib3
 
-ENTRYPOINT ["python3", "mount.py"]
+WORKDIR /data
+COPY . .
+
+RUN pyinstaller --onefile --name tahoe-mount mount.py
+
+ENTRYPOINT ["bash", "/entrypoint.sh"]
+
+FROM debian:bullseye-slim
+
+COPY --from=builder /data/dist/tahoe-mount /tahoe-mount
+
+ENTRYPOINT ["/tahoe-mount"]

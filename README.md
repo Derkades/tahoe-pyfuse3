@@ -11,13 +11,8 @@
 - Writing to files (broken due to tahoe bug, see below)
 
 ### Caveats
-- Due to [severe file corruption bugs in Tahoe-LAFS](https://tahoe-lafs.org/trac/tahoe-lafs/ticket/3818) when writing to MDMF/SDMF mutable files, you should mount the filesystem in read-only mode using `--read-only True`. To upload files, use the file upload script (see below).
-
-### Not yet implemented:
-- Moving
-- Opening files with truncate flag
-- Symlinks
-- mtime, ctime, crtime
+- Due to [severe file corruption bugs in Tahoe-LAFS](https://tahoe-lafs.org/trac/tahoe-lafs/ticket/3818) when writing to MDMF/SDMF mutable files, the file system won't allow writes (not even with `--read-only False`). To upload files, use the file upload script (see below).
+- Mtime/ctime/crtime is not set properly. This will be addressed soon.
 
 ### Usage
 ```
@@ -82,3 +77,26 @@ positional arguments:
 optional arguments:
   -h, --help  show this help message and exit
 ```
+
+Example:
+```
+python3 upload.py /some/dir http://localhost:3456 URI:DIR2:fzwyukltbehjx37nuyp6wy2qge:lzzg3oy2okmfcblquvoyp7qtq6xge2ptge6srogn56hbn7ckhgra
+```
+
+## Installation
+
+### Native python
+
+Install dependencies (debian):
+```
+apt install python3 python3-urllib3 python3-pyfuse3 python3-tqdm
+```
+
+Run `python3 mount.py` or `python3 upload.py`
+
+### Docker
+
+Images `derkades/tahoe-mount` and `derkades/tahoe-upload` are available on Docker Hub. You can also build them locally using `./build-docker.sh`
+
+### Static executables
+Run `./build-static.sh` (uses Docker so it doesn't litter your system with crap) and you'll find executables in `./build`.
