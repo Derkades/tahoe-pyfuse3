@@ -10,7 +10,6 @@ RUN pip install staticx
 RUN pip install urllib3
 
 WORKDIR /data
-COPY . .
 
 # ------------------------------ Build mount ------------------------------
 
@@ -19,6 +18,8 @@ FROM builder-base AS builder-mount
 RUN apt-get install -y libfuse3-dev
 RUN pip install pyfuse3
 
+COPY . .
+
 RUN pyinstaller --onefile --name tahoe-mount mount.py && \
     staticx dist/tahoe-mount dist/tahoe-mount-static
 
@@ -26,7 +27,9 @@ RUN pyinstaller --onefile --name tahoe-mount mount.py && \
 # ------------------------------ Build upload ------------------------------
 
 FROM builder-base as builder-upload
-RUN pip install tqdm
+RUN pip install tqdm requests
+
+COPY . .
 
 RUN pyinstaller --onefile --name tahoe-upload upload.py && \
     staticx dist/tahoe-upload dist/tahoe-upload-static
