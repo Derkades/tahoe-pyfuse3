@@ -12,6 +12,7 @@ from urllib3.exceptions import HTTPError
 from argparse import ArgumentParser
 import errno
 import pyfuse3
+import _pyfuse3  # for pyinstaller
 from pyfuse3 import FUSEError
 import trio
 import stat
@@ -240,7 +241,8 @@ class TahoeFs(pyfuse3.Operations):
     async def releasedir(self, fh: int):
         del self._open_handles[fh]
 
-    async def mkdir(self, parent_inode: int, name: bytes, _mode, _ctx: pyfuse3.RequestContext) -> pyfuse3.EntryAttributes:
+    async def mkdir(self, parent_inode: int, name: bytes,
+                    _mode, _ctx: pyfuse3.RequestContext) -> pyfuse3.EntryAttributes:
         if self.read_only:
             raise pyfuse3.FUSEError(errno.EROFS)
 
@@ -310,7 +312,8 @@ class TahoeFs(pyfuse3.Operations):
         else:
             raise NotImplementedError('unsupported mode: ' + mode)
 
-    async def move(self, old_inode_p: int, old_name: str, new_inode_p: int, new_name: str, flags, ctx: pyfuse3.RequestContext):
+    async def move(self, old_inode_p: int, old_name: str, new_inode_p: int, new_name: str,
+                   flags, ctx: pyfuse3.RequestContext):
         if flags & pyfuse3.RENAME_EXCHANGE == pyfuse3.RENAME_EXCHANGE:
             raise pyfuse3.FUSEError(errno.ENOTSUP)
 
@@ -409,7 +412,8 @@ class TahoeFs(pyfuse3.Operations):
                 local_start = (chunk_index-c_start) * self._chunk_size
                 local_end = (chunk_index-c_start+1) * self._chunk_size
                 chunk_data = data[local_start:local_end]
-                log.debug('storing chunk index %s in chunk cache, size %s (from %s to %s excl)', chunk_index, len(chunk_data), local_start, local_end)
+                log.debug('storing chunk index %s in chunk cache, size %s (from %s to %s excl)',
+                          schunk_index, len(chunk_data), local_start, local_end)
                 cache[chunk_index] = chunk_data
 
     async def read(self, fh: int, off: int, size: int) -> bytes:
@@ -439,7 +443,8 @@ class TahoeFs(pyfuse3.Operations):
                 c_start_chunk = r_start_chunk
                 prefetch_count = prefetch_blocks - r_end_chunk % prefetch_blocks
                 c_end_chunk = r_end_chunk + prefetch_count
-                log.debug('use chunk cache with start=%s, end=%s, chunks=%s, prefetch_blocks=%s, prefetch_count=%s, total_size=%skiB',
+                log.debug('use chunk cache with start=%s, end=%s, chunks=%s, prefetch_blocks=%s, '
+                          'prefetch_count=%s, total_size=%skiB',
                           c_start_chunk,
                           c_end_chunk,
                           c_end_chunk - c_start_chunk + 1,
@@ -570,7 +575,7 @@ def main():
     pyfuse3.init(testfs, options.mountpoint, fuse_options)
     try:
         trio.run(pyfuse3.main)
-    except:
+    except BaseException:
         pyfuse3.close(unmount=True)
         raise
 
