@@ -54,7 +54,11 @@ Options:
 
 Example:
 ```
-mount.tahoe URI:DIR2:fzwyukltbehjx37nuyp6wy2qge:lzzg3oy2okmfcblquvoyp7qtq6xge2ptge6srogn56hbn7ckhgra /mnt/tahoe -o node_url=http://localhost:3456,file_mode=444,dir_mode=555,ro,nofork,allow_other
+mount.tahoe URI:DIR2:fz<snip>ge:lz<snip>ra /mnt/tahoe -o node_url=http://localhost:3456,file_mode=444,dir_mode=555,ro,nofork,allow_other
+```
+fstab:
+```
+URI:DIR2:fz<snip>ge:lz<snip>ra /mnt/tahoe tahoe node_url=http://localhost:3456,file_mode=444,dir_mode=555,ro,nofork,allow_other
 ```
 
 ## File uploader
