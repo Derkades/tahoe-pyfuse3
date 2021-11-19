@@ -31,22 +31,28 @@ log = logging.getLogger(__name__)
 
 class TahoeFs(pyfuse3.Operations):
 
-    def __init__(self, node_url, root_cap, read_only):
+    def __init__(self, node_url, root_cap, read_only, uid, gid, dir_mode, file_mode):
         super(TahoeFs, self).__init__()
         self.supports_dot_lookup = False  # maybe it does?
         self.enable_writeback_cache = False
         self.enable_acl = False
 
         self._node_url = node_url
+        self._read_only = read_only
+        self._uid = uid
+        self._gid = gid
+        self._dir_mode = dir_mode
+        self._file_mode = file_mode
+
         self._inode_to_cap_dict = {pyfuse3.ROOT_INODE: root_cap}
         self._cap_to_inode_dict = {root_cap: pyfuse3.ROOT_INODE}
         self._next_inode = pyfuse3.ROOT_INODE + 1
         self._open_handles = {}
         self._inode_lock = threading.Lock()
         self._fh_lock = threading.Lock()
+
         self._chunk_size = 2*128*1024  # nicely aligned with tahoe 128KiB segments
         self._max_cached_chunks = 256*1024*1024 // self._chunk_size  # 256MiB
-        self.read_only = read_only
 
         self._common_headers = {
             'User-Agent': 'tahoe-mount',
@@ -147,15 +153,15 @@ class TahoeFs(pyfuse3.Operations):
         split = cap.split(':')
         cap_type = split[1]
         if cap_type == 'DIR2':  # SDMF directory
-            entry.st_mode = (stat.S_IFDIR | 0o755)
+            entry.st_mode = (stat.S_IFDIR | self._dir_mode)
             entry.st_size = 0
         elif cap_type == 'DIR2-MDMF':  # MDMF directory
             raise NotImplementedError('MDMF directories not supported')
         elif cap_type == 'CHK':  # Immutable file
-            entry.st_mode = (stat.S_IFREG | 0o444)
+            entry.st_mode = (stat.S_IFREG | self._file_mode)
             entry.st_size = int(split[-1])
         elif cap_type == 'MDMF' or cap_type == 'MDMF-RO':  # MDMF file
-            entry.st_mode = (stat.S_IFREG | 0o644)
+            entry.st_mode = (stat.S_IFREG | self._file_mode)
 
             try:
                 r = self._pool.request('GET',
@@ -171,19 +177,21 @@ class TahoeFs(pyfuse3.Operations):
             r_json = json.loads(r.data.decode())
             entry.st_size = int(r_json[1]['size'])
         elif cap_type == 'SSK' or cap_type == 'SSK-RO':  # SDMF file
-            raise NotImplementedError('SDMF files not supported')
+            log.error('SDMF files not supported')
+            raise FUSEError(errno.EREMOTEIO)
         elif cap_type == 'LIT':
-            entry.st_mode = (stat.S_IFREG | 0o444)
+            entry.st_mode = (stat.S_IFREG | self._file_mode)
             entry.st_size = len(self._decode_lit(cap))
         else:
-            raise NotImplementedError('cap not supported: ' + cap)
+            log.error('cap not supported: ' + cap)
+            raise FUSEError(errno.EREMOTEIO)
 
         stamp = int(1438467123.985654 * 1e9)
         entry.st_atime_ns = stamp
         entry.st_ctime_ns = stamp
         entry.st_mtime_ns = stamp
-        entry.st_gid = os.getgid()
-        entry.st_uid = os.getuid()
+        entry.st_uid = self._uid
+        entry.st_gid = self._gid
         entry.st_ino = self._cap_to_inode(cap)
         entry.st_blksize = 512
         entry.st_blocks = -(-entry.st_size // entry.st_blksize)  # ceil division
@@ -243,7 +251,7 @@ class TahoeFs(pyfuse3.Operations):
 
     async def mkdir(self, parent_inode: int, name: bytes,
                     _mode, _ctx: pyfuse3.RequestContext) -> pyfuse3.EntryAttributes:
-        if self.read_only:
+        if self._read_only:
             raise pyfuse3.FUSEError(errno.EROFS)
 
         parent_cap = self._inode_to_cap(parent_inode)
@@ -282,7 +290,7 @@ class TahoeFs(pyfuse3.Operations):
         return self._getattr(cap)
 
     async def create(self, parent_inode, name, _mode, flags, ctx) -> pyfuse3.EntryAttributes:
-        if self.read_only:
+        if self._read_only:
             raise pyfuse3.FUSEError(errno.EROFS)
 
         log.debug('create')
@@ -347,7 +355,7 @@ class TahoeFs(pyfuse3.Operations):
 
     async def open(self, inode, flags, _ctx):
         if flags & os.O_TRUNC == os.O_TRUNC:
-            if not self.read_only:
+            if not self._read_only:
                 raise Exception('Truncate not supported')
 
         cap = self._inode_to_cap(inode)
@@ -413,7 +421,7 @@ class TahoeFs(pyfuse3.Operations):
                 local_end = (chunk_index-c_start+1) * self._chunk_size
                 chunk_data = data[local_start:local_end]
                 log.debug('storing chunk index %s in chunk cache, size %s (from %s to %s excl)',
-                          schunk_index, len(chunk_data), local_start, local_end)
+                          chunk_index, len(chunk_data), local_start, local_end)
                 cache[chunk_index] = chunk_data
 
     async def read(self, fh: int, off: int, size: int) -> bytes:
@@ -477,7 +485,7 @@ class TahoeFs(pyfuse3.Operations):
             raise NotImplementedError("cap not supported: " + cap)
 
     async def write(self, fh: int, off: int, buf: bytes) -> int:
-        if self.read_only:
+        if self._read_only:
             raise pyfuse3.FUSEError(errno.EROFS)
 
         raise pyfuse3.FUSEError(errno.ENOTSUP)
@@ -510,7 +518,7 @@ class TahoeFs(pyfuse3.Operations):
         del self._open_handles[fh]
 
     async def unlink(self, parent_inode: int, name: bytes, ctx: pyfuse3.RequestContext()):
-        if self.read_only:
+        if self._read_only:
             raise pyfuse3.FUSEError(errno.EROFS)
 
         pcap = self._inode_to_cap(parent_inode)
@@ -547,32 +555,94 @@ def parse_args():
 
     parser = ArgumentParser()
 
-    parser.add_argument('mountpoint', type=str,
-                        help='Where to mount the file system')
-    parser.add_argument('node_url', type=str,
-                        help='')
-    parser.add_argument('root_cap', type=str,
-                        help='')
-    parser.add_argument('--debug', action='store_true', default=False,
-                        help='Enable debugging output')
-    parser.add_argument('--debug-fuse', action='store_true', default=False,
-                        help='Enable FUSE debugging output')
-    parser.add_argument('--read-only', default=False,
-                        help='Don\'t allow writing to, modifying, deleting or creating files or directories.')
+    parser.add_argument('root_cap', help='tahoe capability URI')
+    parser.add_argument('mountpoint', help='mountpoint')
+    parser.add_argument('-o', metavar="OPTIONS", help='Mount options', required=True)
+
     return parser.parse_args()
 
 
 def main():
-    options = parse_args()
-    init_logging(options.debug)
+    args = parse_args()
 
-    testfs = TahoeFs(options.node_url, options.root_cap, options.read_only)
+    # positional arguments
+    root_cap = args.root_cap
+    mountpoint = args.mountpoint
+
+    # options (defaults)
+    node_url = None
+    uid = os.getuid()
+    gid = os.getgid()
+    file_mode = 0o644
+    dir_mode = 0o755
+    read_only = False
+    allow_other = False
+    debug = False
+    debug_fuse = False
+    fork = False
+
+    for opt in args.o.split(','):
+        if '=' in opt:
+            (k, v) = opt.split('=')
+            if k == 'node_url':
+                node_url = v
+            elif k == 'setuid':
+                uid = v
+            elif k == 'setgid':
+                gid = v
+            elif k == 'file_mode':
+                file_mode = int(v, 8)
+            elif k == 'dir_mode':
+                dir_mode = int(v, 8)
+            else:
+                print('Unsupported option:', k)
+        else:
+            if opt == 'ro':
+                read_only = True
+            elif opt == 'noexec':
+                mode_exec = False
+            elif opt == 'exec':
+                mode_exec = True
+            elif opt == 'allow_other':
+                allow_other = True
+            elif opt == 'debug':
+                debug = True
+            elif opt == 'debug_fuse':
+                debug_fuse = True
+            elif opt == 'fork':
+                fork = True
+            elif opt == 'nofork':
+                fork = False
+            else:
+                print('Unsupported option:', opt)
+
+    if not node_url:
+        print('Specify node_url option')
+        exit(1)
+
+    init_logging(debug)
+
+    log.info('Using settings: node_url=%s uid=%s gid=%s file_mode=%s dir_mode=%s '
+             'read_only=%s allow_other=%s debug=%s debug_fuse=%s fork=%s',
+             node_url, uid, gid, oct(file_mode)[2:], oct(dir_mode)[2:],
+             read_only, allow_other, debug, debug_fuse, fork)
+
+    if fork:
+        pid = os.fork()
+        if (pid == 0):
+            pass
+        else:
+            os._exit(0)
+
+    testfs = TahoeFs(node_url, root_cap, read_only, uid, gid, dir_mode, file_mode)
     fuse_options = set(pyfuse3.default_options)
     fuse_options.add('fsname=tahoe')
-    fuse_options.add('allow_other')
-    if options.debug_fuse:
+    if allow_other:
+        fuse_options.add('allow_other')
+    if debug_fuse:
         fuse_options.add('debug')
-    pyfuse3.init(testfs, options.mountpoint, fuse_options)
+    pyfuse3.init(testfs, mountpoint, fuse_options)
+    log.info('Initialized successfully')
     try:
         trio.run(pyfuse3.main)
     except BaseException:

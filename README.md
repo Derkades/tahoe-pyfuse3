@@ -16,7 +16,7 @@ Run `python3 mount.py` or `python3 upload.py`
 Images `derkades/tahoe-mount` and `derkades/tahoe-upload` are available on Docker Hub. You can also build them locally using `./build-docker.sh`
 
 ### Static executables
-Run `./build-static.sh` (uses Docker so it doesn't litter your system with crap) and you'll find executables in `./build`.
+Run `./build-static.sh` (uses Docker so it doesn't litter your system with crap) and you'll find executables in `./build`. Copy `mount.tahoe` to `/usr/local/sbin` for usage in `/etc/fstab`.
 
 ## Mount client
 
@@ -34,23 +34,27 @@ Run `./build-static.sh` (uses Docker so it doesn't litter your system with crap)
 
 ### Usage
 ```
-usage: mount.py [-h] [--debug] [--debug-fuse] [--read-only READ_ONLY] mountpoint node_url root_cap
-
-positional arguments:
-  mountpoint            Where to mount the file system
-  node_url
-  root_cap
-
-optional arguments:
-  -h, --help            show this help message and exit
-  --debug               Enable debugging output
-  --debug-fuse          Enable FUSE debugging output
-  --read-only READ_ONLY
-                        Don't allow writing to, modifying, deleting or creating files or directories.
+mount.tahoe <root cap> <mountpoint> -o <options>
 ```
+
+Options:
+| name | value | description
+| - | - | -
+| `node_url` | string, standard url format | Tahoe-LAFS node web API URL (REQUIRED)
+| `setuid` | int | User id which all files and directories in the filesystem should be owned by. Defaults to the user running the mount command (usually root).
+| `setgid` | int | Group id, see above
+| `file_mode` | int | Permission mode for files (default 644)
+| `dir_mode` | int | Permission mode for directories (default 755)
+| `ro` | none | Make filesystem read-only
+| `allow_other` | none | Sets the FUSE allow_other option
+| `debug` | none | Enables application debug logging
+| `debug_fuse` | none | Enables FUSE debug logging
+| `fork` | none | Fork before entering main filesystem loop, required for use in /etc/fstab
+| `nofork` | none | Do not fork, see above (default)
+
 Example:
 ```
-sudo python3 mount.py --read-only-files true --debug /mnt/tahoe http://localhost:3456 URI:DIR2:fzwyukltbehjx37nuyp6wy2qge:lzzg3oy2okmfcblquvoyp7qtq6xge2ptge6srogn56hbn7ckhgra
+mount.tahoe URI:DIR2:fzwyukltbehjx37nuyp6wy2qge:lzzg3oy2okmfcblquvoyp7qtq6xge2ptge6srogn56hbn7ckhgra /mnt/tahoe -o node_url=http://localhost:3456,file_mode=444,dir_mode=555,ro,nofork,allow_other
 ```
 
 ## File uploader
