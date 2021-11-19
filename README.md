@@ -18,6 +18,9 @@ Images `derkades/tahoe-mount` and `derkades/tahoe-upload` are available on Docke
 ### Static executables
 Run `./build-static.sh` (uses Docker so it doesn't litter your system with crap) and you'll find executables in `./build`. Copy `mount.tahoe` to `/usr/local/sbin` for usage in `/etc/fstab`.
 
+### Debian
+Packages `tahoe-mount` and `tahoe-upload` are available for amd64 in [my repository](https://deb.rkslot.nl).
+
 ## Mount client
 
 ### Features
