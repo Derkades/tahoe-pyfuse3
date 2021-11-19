@@ -38,5 +38,5 @@ RUN pyinstaller --onefile --name tahoe-upload upload.py && \
 
 FROM scratch
 
-COPY --from=builder-mount /data/dist/tahoe-mount-static /tahoe-mount
+COPY --from=builder-mount /data/dist/tahoe-mount-static /mount.tahoe
 COPY --from=builder-upload /data/dist/tahoe-upload-static /tahoe-upload
