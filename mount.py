@@ -60,19 +60,22 @@ class TahoeFs(pyfuse3.Operations):
         }
 
         retry_config = urllib3.Retry(total=3, connect=3, read=3, redirect=0, other=0)
+        timeout_config = urllib3.Timeout(total=5.0)
         parsed_url = urlparse(node_url)
         if parsed_url.scheme == 'http':
             port = parsed_url.port if parsed_url.port is not None else 80
             self._pool = urllib3.HTTPConnectionPool(parsed_url.hostname,
                                                     port,
                                                     headers=self._common_headers,
-                                                    retries=retry_config)
+                                                    retries=retry_config,
+                                                    timeout=timeout_config)
         elif parsed_url.scheme == 'https':
             port = parsed_url.port if parsed_url.port is not None else 443
             self._pool = urllib3.HTTPSConnectionPool(parsed_url.hostname,
                                                      parsed_url.port,
                                                      headers=self._common_headers,
-                                                     retries=retry_config)
+                                                     retries=retry_config,
+                                                     timeout=timeout_config)
 
         try:
             self._find_cap_in_parent(pyfuse3.ROOT_INODE, None)
