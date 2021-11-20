@@ -4,12 +4,12 @@ import threading
 import logging
 import base64
 import json
-from typing import Optional, List
+from typing import Optional, List, Dict, Any, Tuple, Union, cast
 from urllib.parse import urlparse, quote
 import urllib3
 from urllib3.exceptions import HTTPError
 
-from argparse import ArgumentParser
+import argparse
 import errno
 import pyfuse3
 import _pyfuse3  # for pyinstaller
@@ -31,7 +31,8 @@ log = logging.getLogger(__name__)
 
 class TahoeFs(pyfuse3.Operations):
 
-    def __init__(self, node_url, root_cap, read_only, uid, gid, dir_mode, file_mode):
+    def __init__(self, node_url: str, root_cap: str, read_only: bool,
+                 uid: int, gid: int, dir_mode: int, file_mode: int) -> None:
         super(TahoeFs, self).__init__()
         self.supports_dot_lookup = False  # maybe it does?
         self.enable_writeback_cache = False
@@ -47,7 +48,8 @@ class TahoeFs(pyfuse3.Operations):
         self._inode_to_cap_dict = {pyfuse3.ROOT_INODE: root_cap}
         self._cap_to_inode_dict = {root_cap: pyfuse3.ROOT_INODE}
         self._next_inode = pyfuse3.ROOT_INODE + 1
-        self._open_handles = {}
+        # dict value is (cap, chunk_cache) for files and dict[child_name, child_json] for directories
+        self._open_handles: Dict[int, Union[Tuple[str, Dict[int, bytes]], Dict[str, Any]]] = {}
         self._inode_lock = threading.Lock()
         self._fh_lock = threading.Lock()
 
@@ -82,7 +84,7 @@ class TahoeFs(pyfuse3.Operations):
         except pyfuse3.FUSEError:
             pass
 
-    def _create_handle(self, data) -> int:
+    def _create_handle(self, data: Union[Tuple[str, Dict[int, bytes]], Dict[str, Any]]) -> int:
         with self._fh_lock:
             for i in range(1000):
                 if i not in self._open_handles:
@@ -113,17 +115,26 @@ class TahoeFs(pyfuse3.Operations):
         return cap.split(':')[1] in {'DIR2', 'DIR2-MDMF'}
 
     def _cap_from_child_json(self, json: list) -> str:
-        log.debug(json)
-        json = json[1]
-        return json['rw_uri'] if 'rw_uri' in json else json['ro_uri']
+        json2: Dict[str, Any] = json[1]
+        return json2['rw_uri'] if 'rw_uri' in json2 else json2['ro_uri']
 
-    def _find_cap_in_parent(self, parent_inode: int, name: str) -> str:
+    def _find_cap_in_parent(self, parent_inode: int, name: Optional[str]) -> str:
+        """
+        Look up the file cap corresponding to a name in a parent directory.
+        Parameters
+            parent_inode: Inode of the parent directory. Raises FUSEError(errno.ENOTDIR) if it's not a directory.
+            name: Name of the file/directory to look for. If None, this method makes the an HTTP request but doesn't
+                  attempt to find the name in the given directory. name=None is used once at startup to initialize the
+                  inode cap map with the root directory.
+        Returns
+            Capability. Raises FUSEError(errno.ENOENT) if the file was not found.
+        """
         cap = self._inode_to_cap(parent_inode)
         if not cap:
             raise ValueError(f'{parent_inode=} unknown')
 
         if not self._cap_is_dir(cap):
-            raise(pyfuse3.FUSEError(errno.ENOTDIR))
+            raise(FUSEError(errno.ENOTDIR))
 
         try:
             r = self._pool.request('GET',
@@ -137,6 +148,9 @@ class TahoeFs(pyfuse3.Operations):
             raise FUSEError(errno.EREMOTEIO)
 
         r_json = json.loads(r.data.decode())
+
+        if name is None:
+            raise FUSEError(errno.ENOENT)
 
         for child_name in r_json[1]['children'].keys():
             if child_name == name:
@@ -201,18 +215,18 @@ class TahoeFs(pyfuse3.Operations):
 
         return entry
 
-    async def getattr(self, inode: int, ctx=None) -> pyfuse3.EntryAttributes:
+    async def getattr(self, inode: int, _ctx: pyfuse3.RequestContext) -> pyfuse3.EntryAttributes:
         cap = self._inode_to_cap(inode)
         if not cap:
             raise ValueError(f'{inode=} unknown')
 
         return self._getattr(cap)
 
-    async def lookup(self, parent_inode: int, name: bytes, _ctx=None) -> pyfuse3.EntryAttributes:
+    async def lookup(self, parent_inode: int, name: bytes, _ctx: pyfuse3.RequestContext) -> pyfuse3.EntryAttributes:
         cap: str = self._find_cap_in_parent(parent_inode, name.decode())
         return self._getattr(cap)
 
-    async def opendir(self, inode, _ctx):
+    async def opendir(self, inode: int, _ctx: pyfuse3.RequestContext) -> int:
         cap = self._inode_to_cap(inode)
         if not cap:
             raise ValueError(f'{inode=} unknown')
@@ -229,31 +243,32 @@ class TahoeFs(pyfuse3.Operations):
             raise FUSEError(errno.EREMOTEIO)
 
         r_json = json.loads(r.data.decode())
+        children: Dict[str, Any] = r_json[1]['children']
+        return self._create_handle(children)
 
-        return self._create_handle(r_json)
-
-    async def readdir(self, fh: int, start_id: int, token: pyfuse3.ReaddirToken):
+    async def readdir(self, fh: int, start_id: int, token: pyfuse3.ReaddirToken) -> None:
         if fh not in self._open_handles:
             raise ValueError(f'file handle is not open? {fh=}')
 
-        children: dict = self._open_handles[fh][1]['children']
+        # children: Dict[str, List[Any]] = self._open_handles[fh][1]['children']
+        children: Dict[str, Any] = cast(Dict[str, Any], self._open_handles[fh])
 
         i = 0
         for child_name in children.keys():
             if i >= start_id:
-                child = children[child_name]
-                cap = self._cap_from_child_json(child)
+                child_json: List[Any] = children[child_name]
+                cap: str = self._cap_from_child_json(child_json)
                 if not pyfuse3.readdir_reply(token, child_name.encode(), self._getattr(cap), i+1):
                     return
             i += 1
 
         return
 
-    async def releasedir(self, fh: int):
+    async def releasedir(self, fh: int) -> None:
         del self._open_handles[fh]
 
     async def mkdir(self, parent_inode: int, name: bytes,
-                    _mode, _ctx: pyfuse3.RequestContext) -> pyfuse3.EntryAttributes:
+                    _mode: int, _ctx: pyfuse3.RequestContext) -> pyfuse3.EntryAttributes:
         if self._read_only:
             raise pyfuse3.FUSEError(errno.EROFS)
 
@@ -292,7 +307,8 @@ class TahoeFs(pyfuse3.Operations):
 
         return self._getattr(cap)
 
-    async def create(self, parent_inode, name, _mode, flags, ctx) -> pyfuse3.EntryAttributes:
+    async def create(self, parent_inode: int, name: bytes, mode: int,
+                     flags: int, ctx: pyfuse3.RequestContext) -> pyfuse3.EntryAttributes:
         if self._read_only:
             raise pyfuse3.FUSEError(errno.EROFS)
 
@@ -321,10 +337,10 @@ class TahoeFs(pyfuse3.Operations):
             fi = self.open(inode, flags, ctx)
             return fi, self._getattr(cap)
         else:
-            raise NotImplementedError('unsupported mode: ' + mode)
+            raise NotImplementedError('unsupported mode: ' + oct(mode))
 
     async def move(self, old_inode_p: int, old_name: str, new_inode_p: int, new_name: str,
-                   flags, ctx: pyfuse3.RequestContext):
+                   flags: int, ctx: pyfuse3.RequestContext) -> None:
         if flags & pyfuse3.RENAME_EXCHANGE == pyfuse3.RENAME_EXCHANGE:
             raise pyfuse3.FUSEError(errno.ENOTSUP)
 
@@ -356,14 +372,14 @@ class TahoeFs(pyfuse3.Operations):
             log.warning('unexpected status code %s move() POST request', r.status)
             raise FUSEError(errno.EREMOTEIO)
 
-    async def open(self, inode, flags, _ctx):
+    async def open(self, inode: int, flags: int, _ctx: pyfuse3.RequestContext) -> pyfuse3.FileInfo:
         if flags & os.O_TRUNC == os.O_TRUNC:
             if not self._read_only:
                 raise Exception('Truncate not supported')
 
         cap = self._inode_to_cap(inode)
         assert cap
-        data = (cap, {})  # second element in tuple is for chunk cache
+        data: Tuple[str, Dict[int, bytes]] = (cap, {})  # second element in tuple is for chunk cache
         fh = self._create_handle(data)
         log.debug('open fh %s', fh)
         return pyfuse3.FileInfo(fh=fh)
@@ -390,7 +406,7 @@ class TahoeFs(pyfuse3.Operations):
 
         return r.data
 
-    def _cache_chunks(self, cap: str, cache, chunks_to_download: List[int]) -> None:
+    def _cache_chunks(self, cap: str, cache: Dict[int, bytes], chunks_to_download: List[int]) -> None:
         if len(chunks_to_download) == 0:
             return
 
@@ -409,8 +425,8 @@ class TahoeFs(pyfuse3.Operations):
 
         log.debug('downloading ranges %s', ranges_to_download)
 
-        for ranges_to_download in ranges_to_download:
-            c_start, c_end_incl = ranges_to_download
+        for range_to_download in ranges_to_download:
+            c_start, c_end_incl = range_to_download
             # make one large request for better throughput
             r_start = c_start * self._chunk_size
             r_end_excl = (c_end_incl+1) * self._chunk_size
@@ -428,7 +444,7 @@ class TahoeFs(pyfuse3.Operations):
                 cache[chunk_index] = chunk_data
 
     async def read(self, fh: int, off: int, size: int) -> bytes:
-        (cap, cache) = self._open_handles[fh]
+        (cap, cache) = cast(Tuple[str, Dict[int, bytes]], self._open_handles[fh])
 
         cap_type = cap.split(':')[1]
 
@@ -505,7 +521,7 @@ class TahoeFs(pyfuse3.Operations):
         try:
             r = self._pool.request('PUT',
                                    '/uri/' + quote(cap) + '?offset=' + str(off),
-                                   body=data)
+                                   body=buf)
         except HTTPError as e:
             log.warning('error during PUT request for write(): %s', e)
             raise FUSEError(errno.EREMOTEIO)
@@ -516,15 +532,16 @@ class TahoeFs(pyfuse3.Operations):
 
         return len(buf)
 
-    async def release(self, fh: int):
+    async def release(self, fh: int) -> None:
         log.debug('release fh %s', fh)
         del self._open_handles[fh]
 
-    async def unlink(self, parent_inode: int, name: bytes, ctx: pyfuse3.RequestContext()):
+    async def unlink(self, parent_inode: int, name: bytes, ctx: pyfuse3.RequestContext) -> None:
         if self._read_only:
             raise pyfuse3.FUSEError(errno.EROFS)
 
         pcap = self._inode_to_cap(parent_inode)
+        assert pcap is not None
 
         try:
             r = self._pool.request('DELETE',
@@ -538,7 +555,7 @@ class TahoeFs(pyfuse3.Operations):
             raise FUSEError(errno.EREMOTEIO)
 
 
-def init_logging(debug=False):
+def init_logging(debug: bool = False) -> None:
     formatter = logging.Formatter('%(asctime)s.%(msecs)03d %(threadName)s: '
                                   '[%(name)s] %(message)s', datefmt="%Y-%m-%d %H:%M:%S")
     handler = logging.StreamHandler()
@@ -553,10 +570,10 @@ def init_logging(debug=False):
     root_logger.addHandler(handler)
 
 
-def parse_args():
+def parse_args() -> argparse.Namespace:
     """Parse command line"""
 
-    parser = ArgumentParser()
+    parser = argparse.ArgumentParser()
 
     parser.add_argument('root_cap', help='tahoe capability URI')
     parser.add_argument('mountpoint', help='mountpoint')
@@ -565,7 +582,7 @@ def parse_args():
     return parser.parse_args()
 
 
-def main():
+def main() -> None:
     args = parse_args()
 
     # positional arguments

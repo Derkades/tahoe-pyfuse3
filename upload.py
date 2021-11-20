@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import sys
 import requests
+from typing import BinaryIO, Generator
 from urllib.parse import quote
 from pathlib import Path
 from argparse import ArgumentParser
@@ -14,17 +15,17 @@ assert UPLOAD_BLOCK_SIZE > 0
 assert UPLOAD_PROGRESS_UNIT in {'bytes', 'bits'}
 
 
-def file_reader(f, bar):
+def file_reader(f: BinaryIO, bar: tqdm) -> Generator[bytes, None, None]:
     while True:
-        data = f.read(UPLOAD_BLOCK_SIZE)
+        data: bytes = f.read(UPLOAD_BLOCK_SIZE)
         if data:
-            yield data
             bar.update(len(data) * (8 if UPLOAD_PROGRESS_UNIT == 'bits' else 1))
+            yield data
         else:
             break
 
 
-def upload_file(path: Path, file_size: int, api: str, parent_cap: str, log_prefix: str):
+def upload_file(path: Path, file_size: int, api: str, parent_cap: str, log_prefix: str) -> None:
     with open(path, 'rb') \
             as f, tqdm(desc=(log_prefix + path.name),
                        total=file_size * (8 if UPLOAD_PROGRESS_UNIT == 'bits' else 1),
@@ -43,7 +44,7 @@ def upload_file(path: Path, file_size: int, api: str, parent_cap: str, log_prefi
         exit(1)
 
 
-def check_upload_file(path: Path, api: str, parent_cap: str, log_prefix: str):
+def check_upload_file(path: Path, api: str, parent_cap: str, log_prefix: str) -> None:
     # check if a file or directory with this name already exists
     print(log_prefix + path.name, end=': ')
     r = requests.get(f'{api}/uri/{quote(parent_cap)}/{quote(path.name)}?t=json',
@@ -83,7 +84,7 @@ def check_upload_file(path: Path, api: str, parent_cap: str, log_prefix: str):
         exit(1)
 
 
-def upload_dir(path: Path, api: str, parent_cap: str, log_prefix: str):
+def upload_dir(path: Path, api: str, parent_cap: str, log_prefix: str) -> None:
     print(log_prefix + path.name, end=': ')
     r = requests.get(f'{api}/uri/{quote(parent_cap)}/{quote(path.name)}?t=json',
                      headers={'Accept': 'text/plain'})
@@ -112,7 +113,7 @@ def upload_dir(path: Path, api: str, parent_cap: str, log_prefix: str):
     upload_contents(parent_path=path, api=api, parent_cap=cap, log_prefix=(log_prefix + '    '))
 
 
-def upload_contents(parent_path: Path, api: str, parent_cap: str, log_prefix: str):
+def upload_contents(parent_path: Path, api: str, parent_cap: str, log_prefix: str) -> None:
     for path in parent_path.iterdir():
         if path.is_file():
             check_upload_file(path, api, parent_cap, log_prefix)
@@ -122,7 +123,7 @@ def upload_contents(parent_path: Path, api: str, parent_cap: str, log_prefix: st
             print(log_prefix + path.name, "skipping, unknown file type")
 
 
-def main(path_str: str, api: str, cap: str):
+def main(path_str: str, api: str, cap: str) -> None:
     path = Path(path_str)
     if path_str.endswith('/'):
         upload_contents(parent_path=path, api=api, parent_cap=cap, log_prefix='')
