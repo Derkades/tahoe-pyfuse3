@@ -1,6 +1,6 @@
 #!/bin/bash
 set -e
-VERSION=0.0.0-4
+VERSION=0.0.0-12
 
 rm -rf build/*_amd64
 rm -rf build/*.deb
@@ -8,10 +8,11 @@ rm -rf build/*.deb
 # ------------------------ mount (static) ------------------------
 
 mkdir -p "build/tahoe-mount-static_${VERSION}_amd64/DEBIAN"
-mkdir -p "build/tahoe-mount-static_${VERSION}_amd64/usr/sbin"
+# mkdir -p "build/tahoe-mount-static_${VERSION}_amd64/usr/sbin"
+mkdir -p "build/tahoe-mount-static_${VERSION}_amd64/usr/bin"
 
-STATIC_MOUNT_SIZE=$(stat -c%s build/mount.tahoe)
-STATIC_MOUNT_SIZE=$((STATIC_MOUNT_SIZE/1024))
+# STATIC_MOUNT_SIZE=$(stat -c%s build/mount.tahoe)
+# STATIC_MOUNT_SIZE=$((STATIC_MOUNT_SIZE/1024))
 cat << EOF > "build/tahoe-mount-static_${VERSION}_amd64/DEBIAN/control"
 Package: tahoe-mount-static
 Version: $VERSION
@@ -20,12 +21,21 @@ Priority: optional
 Architecture: amd64
 Maintainer: Robin Slot <robin@rkslot.nl>
 Description: FUSE mount client for Tahoe-LAFS (static)
-Installed-Size: $STATIC_MOUNT_SIZE
 Conflicts: tahoe-mount
 EOF
 
-cp build/mount.tahoe "build/tahoe-mount-static_${VERSION}_amd64/usr/sbin"
-chmod +rx "build/tahoe-mount-static_${VERSION}_amd64/usr/sbin/mount.tahoe"
+cat << EOF > "build/tahoe-mount-static_${VERSION}_amd64/DEBIAN/links"
+usr/bin/tahoe-mount-bundle/tahoe-mount-bundle /usr/sbin/mount.tahoe
+EOF
+
+cp -r build/tahoe-mount-bundle "build/tahoe-mount-static_${VERSION}_amd64/usr/bin/"
+# cat << EOF > "build/tahoe-mount-static_${VERSION}_amd64/usr/sbin/mount.tahoe"
+# #!/bin/sh
+# set -e
+# cd /usr/bin/tahoe-mount-bundle
+# ./tahoe-mount-bundle "$@"
+# EOF
+# chmod +rx "build/tahoe-mount-static_${VERSION}_amd64/usr/sbin/mount.tahoe"
 
 dpkg-deb --build --root-owner-group "build/tahoe-mount-static_${VERSION}_amd64"
 

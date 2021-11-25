@@ -1,3 +1,7 @@
 .idea/
 __pycache__/
 build/
+
+*.substvars
+*.changes
+upload/debian/tahoe-upload

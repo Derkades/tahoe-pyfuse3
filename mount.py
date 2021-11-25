@@ -61,8 +61,8 @@ class TahoeFs(pyfuse3.Operations):
             'Accept': 'text/plain'
         }
 
-        retry_config = urllib3.Retry(total=3, connect=3, read=3, redirect=0, other=0)
-        timeout_config = urllib3.Timeout(total=5.0)
+        retry_config = urllib3.Retry(total=2, connect=2, read=2, redirect=0, other=0)
+        timeout_config = urllib3.Timeout(total=10)
         parsed_url = urlparse(node_url)
         if parsed_url.scheme == 'http':
             port = parsed_url.port if parsed_url.port is not None else 80
@@ -169,7 +169,7 @@ class TahoeFs(pyfuse3.Operations):
 
         split = cap.split(':')
         cap_type = split[1]
-        if cap_type == 'DIR2':  # SDMF directory
+        if cap_type == 'DIR2' or cap_type == 'DIR2-RO':  # SDMF directory
             entry.st_mode = (stat.S_IFDIR | self._dir_mode)
             entry.st_size = 0
         elif cap_type == 'DIR2-MDMF':  # MDMF directory

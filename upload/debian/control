@@ -1,0 +1,10 @@
+Source: tahoe-upload
+Section: devel
+Priority: optional
+Maintainer: Robin Slot <robin@rkslot.nl>
+Build-Depends: debhelper (>= 10)
+
+Package: tahoe-upload
+Architecture: all
+Depends: python3 (>= 3.7), python3-requests, python3-tqdm
+Description: aaaaaa
