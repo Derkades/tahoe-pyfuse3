@@ -1,0 +1,16 @@
+#!/usr/bin/make -f
+
+clean:
+	@
+
+build:
+	@
+
+binary:
+	rm -rf debian/tahoe-mount
+	mkdir -p debian/tahoe-mount
+	mkdir -p debian/tahoe-mount/usr/sbin
+	cp mount.py debian/tahoe-mount/usr/sbin/mount.tahoe
+	chmod +x debian/tahoe-mount/usr/sbin/mount.tahoe
+	dh_gencontrol
+	dh_builddeb

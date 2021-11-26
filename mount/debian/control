@@ -1,0 +1,10 @@
+Source: tahoe-mount
+Section: devel
+Priority: optional
+Maintainer: Robin Slot <robin@rkslot.nl>
+Build-Depends: debhelper (>= 10)
+
+Package: tahoe-mount
+Architecture: all
+Depends: python3 (>= 3.7), python3-pyfuse3, python3-urllib3
+Description: FUSE mount client for Tahoe-LAFS

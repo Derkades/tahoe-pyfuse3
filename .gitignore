@@ -6,5 +6,7 @@ build/
 *.changes
 *.buildinfo
 *.deb
+*.debhelper.log
 /upload/debian/tahoe-upload
+/mount/debian/tahoe-mount
 /*/debian/files
