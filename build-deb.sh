@@ -1,7 +1,4 @@
 #!/bin/bash
-set -e
-
-cd upload
-dpkg-buildpackage -b --no-sign
-cd ../mount
-dpkg-buildpackage -b --no-sign
+set -ex
+docker build -t tahoe-deb-builder -f Dockerfile.deb .
+docker run --rm -it --mount "type=bind,source=$(pwd),target=/data" --user "$(id -u)" tahoe-deb-builder
