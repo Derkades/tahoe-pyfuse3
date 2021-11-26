@@ -1,0 +1,15 @@
+# run 'docker-compose up build_debian' to automatically build deb packages
+
+version: '3.2'
+
+services:
+
+  build_debian:
+    user: '1000' # set this to your user id to avoid permission issues!
+    build:
+      context: .
+      dockerfile: Dockerfile.debian
+    volumes:
+      - type: bind
+        source: .
+        target: /data
