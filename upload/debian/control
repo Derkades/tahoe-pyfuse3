@@ -7,4 +7,4 @@ Build-Depends: debhelper (>= 10)
 Package: tahoe-upload
 Architecture: all
 Depends: python3 (>= 3.7), python3-requests, python3-tqdm
-Description: aaaaaa
+Description: rsync-like upload program for Tahoe-LAFS

@@ -7,9 +7,10 @@ build:
 	@
 
 binary:
+	rm -rf debian/tahoe-upload
 	mkdir -p debian/tahoe-upload
 	mkdir -p debian/tahoe-upload/usr/bin
-	cp upload.py debian/tahoe-upload/usr/bin/upload
-	chmod +x debian/tahoe-upload/usr/bin/upload
+	cp upload.py debian/tahoe-upload/usr/bin/tahoe-upload
+	chmod +x debian/tahoe-upload/usr/bin/tahoe-upload
 	dh_gencontrol
 	dh_builddeb

@@ -1,5 +1,5 @@
-tahoe-upload (0.0.0-1) any; urgency=medium
+tahoe-upload (1.0.0-1) any; urgency=medium
 
-  * Initial packaging work with dpkg-buildpackage.
+  * Initial release
 
- -- Robin Slot <robinslot@hotmail.nl>  Thu, 06 Jul 2017 09:19:24 +0000
+ -- Robin Slot <robin@rkslot.nl>  Fri, 26 Nov 2021 13:51:32 +0100
