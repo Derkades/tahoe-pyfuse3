@@ -1,0 +1,6 @@
+#!/bin/bash
+set -e
+
+mkdir -p debian/tahoe-upload/usr/bin
+cp upload.py debian/tahoe-upload/usr/bin/tahoe-upload
+chmod +x debian/tahoe-upload/usr/bin/tahoe-upload

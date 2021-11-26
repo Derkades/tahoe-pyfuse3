@@ -131,7 +131,7 @@ class TahoeFs(pyfuse3.Operations):
         """
         cap = self._inode_to_cap(parent_inode)
         if not cap:
-            raise ValueError(f'{parent_inode=} unknown')
+            raise ValueError(f'parent_inode={parent_inode} unknown')
 
         if not self._cap_is_dir(cap):
             raise(FUSEError(errno.ENOTDIR))
@@ -218,7 +218,7 @@ class TahoeFs(pyfuse3.Operations):
     async def getattr(self, inode: int, _ctx: pyfuse3.RequestContext) -> pyfuse3.EntryAttributes:
         cap = self._inode_to_cap(inode)
         if not cap:
-            raise ValueError(f'{inode=} unknown')
+            raise ValueError(f'inode {inode} unknown')
 
         return self._getattr(cap)
 
@@ -229,7 +229,7 @@ class TahoeFs(pyfuse3.Operations):
     async def opendir(self, inode: int, _ctx: pyfuse3.RequestContext) -> int:
         cap = self._inode_to_cap(inode)
         if not cap:
-            raise ValueError(f'{inode=} unknown')
+            raise ValueError(f'inode {inode} unknown')
 
         try:
             r = self._pool.request('GET',
@@ -248,7 +248,7 @@ class TahoeFs(pyfuse3.Operations):
 
     async def readdir(self, fh: int, start_id: int, token: pyfuse3.ReaddirToken) -> None:
         if fh not in self._open_handles:
-            raise ValueError(f'file handle is not open? {fh=}')
+            raise ValueError(f'file handle is not open? {fh}')
 
         # children: Dict[str, List[Any]] = self._open_handles[fh][1]['children']
         children: Dict[str, Any] = cast(Dict[str, Any], self._open_handles[fh])
@@ -274,7 +274,7 @@ class TahoeFs(pyfuse3.Operations):
 
         parent_cap = self._inode_to_cap(parent_inode)
         if not parent_cap:
-            raise ValueError(f'{parent_inode=} unknown')
+            raise ValueError(f'parent_inode {parent_inode} unknown')
 
         if not self._cap_is_dir(parent_cap):
             raise(pyfuse3.FUSEError(errno.ENOTDIR))
@@ -316,7 +316,7 @@ class TahoeFs(pyfuse3.Operations):
         if mode & stat.S_IFREG == stat.S_IFREG:
             parent_cap = self._inode_to_cap(parent_inode)
             if not parent_cap:
-                raise ValueError(f'{parent_inode=} unknown')
+                raise ValueError(f'parent_inode {parent_inode} unknown')
 
             if not self._cap_is_dir(parent_cap):
                 raise(pyfuse3.FUSEError(errno.ENOTDIR))

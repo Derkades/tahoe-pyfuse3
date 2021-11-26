@@ -1,7 +1,8 @@
-.idea/
+/.idea/
+/.mypy_cache/
 __pycache__/
-build/
 
+# debhelper
 *.substvars
 *.changes
 *.buildinfo
@@ -9,5 +10,14 @@ build/
 *.debhelper.log
 debhelper-build-stamp
 /upload/debian/tahoe-upload
+/upload/debian/tahoe-upload-static
 /mount/debian/tahoe-mount
+/mount/debian/tahoe-mount-static
+/mount/debian/tahoe-mount
+/*/debian/.debhelper
 /*/debian/files
+
+# pyinstaller
+/*/dist
+/*/build
+/*/*.spec

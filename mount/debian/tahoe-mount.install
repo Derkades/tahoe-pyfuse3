@@ -1,0 +1,6 @@
+#!/bin/bash
+set -e
+
+mkdir -p debian/tahoe-mount/usr/sbin
+cp mount.py debian/tahoe-mount/usr/sbin/mount.tahoe
+chmod +x debian/tahoe-mount/usr/sbin/mount.tahoe

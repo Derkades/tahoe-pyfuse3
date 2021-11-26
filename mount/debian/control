@@ -8,3 +8,10 @@ Package: tahoe-mount
 Architecture: all
 Depends: python3 (>= 3.7), python3-pyfuse3, python3-urllib3
 Description: FUSE mount client for Tahoe-LAFS
+Conflicts: tahoe-mount-static
+
+Package: tahoe-mount-static
+Architecture: all
+Description: FUSE mount client for Tahoe-LAFS (static build)
+Conflicts: tahoe-mount
+Provides: tahoe-mount

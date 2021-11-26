@@ -1,0 +1,7 @@
+#!/bin/bash
+set -e
+
+pyinstaller --name tahoe-upload upload.py
+
+mkdir -p debian/tahoe-upload-static/usr/lib
+cp -r dist/tahoe-upload debian/tahoe-upload-static/usr/lib

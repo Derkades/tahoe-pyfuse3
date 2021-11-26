@@ -1,0 +1,7 @@
+#!/bin/bash
+set -e
+
+pyinstaller --name tahoe-mount mount.py
+
+mkdir -p debian/tahoe-mount-static/usr/lib
+cp -r dist/tahoe-mount debian/tahoe-mount-static/usr/lib

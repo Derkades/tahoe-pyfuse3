@@ -13,13 +13,15 @@ Run `python3 mount.py` or `python3 upload.py`
 
 ### Docker
 
-Images `derkades/tahoe-mount` and `derkades/tahoe-upload` are available on Docker Hub. You can also build them locally using `./build-docker.sh`
+Images `derkades/tahoe-mount` and `derkades/tahoe-upload` are available on Docker Hub. You can also build them locally using `./build-docker.sh`. Please note that mounting filesystems from docker containers is usually not a great idea, for production use please install packages on your host system instead.
 
 ### Static executables
-Run `./build-static.sh` (uses Docker so it doesn't litter your system with crap) and you'll find executables in `./build`. Copy `mount.tahoe` to `/usr/local/sbin` for usage in `/etc/fstab`.
+Run `./build-deb.sh`, you can ignore the debs it builds and instead navigate to `upload/dist/tahoe-upload` or `mount/dist/tahoe-mount` to find static executables. They require libc 2.28, so at least Debian Buster or Ubuntu Focal.
 
 ### Debian
-Packages `tahoe-mount` and `tahoe-upload` are available for amd64 in [my repository](https://deb.rkslot.nl). If you run into missing dependency issues on older versions, use the `tahoe-mount-static` and `tahoe-upload-static` versions instead.
+Packages `tahoe-mount` and `tahoe-upload` are available for amd64 in [my repository](https://deb.rkslot.nl). If you run into missing dependency issues on older Debian/Ubuntu versions, use the `tahoe-mount-static` and `tahoe-upload-static` versions instead.
+
+To build these packages locally, run `./build-deb.sh`.
 
 ## Mount client
 

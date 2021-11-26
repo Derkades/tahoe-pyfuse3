@@ -1,16 +1,13 @@
 #!/usr/bin/make -f
 
 clean:
-	@
+	rm -rf debian/tahoe-mount debian/tahoe-mount-static build dist
 
 build:
 	@
 
 binary:
-	rm -rf debian/tahoe-mount
-	mkdir -p debian/tahoe-mount
-	mkdir -p debian/tahoe-mount/usr/sbin
-	cp mount.py debian/tahoe-mount/usr/sbin/mount.tahoe
-	chmod +x debian/tahoe-mount/usr/sbin/mount.tahoe
 	dh_gencontrol
+	dh_install
+	dh_link
 	dh_builddeb
