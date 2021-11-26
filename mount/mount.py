@@ -384,7 +384,7 @@ class TahoeFs(pyfuse3.Operations):
         log.debug('open fh %s', fh)
         return pyfuse3.FileInfo(fh=fh)
 
-    def _download_range(self, cap: str, start: int, end_excl: int) -> bytes:
+    async def _download_range(self, cap: str, start: int, end_excl: int) -> bytes:
         try:
             r = self._pool.request('GET',
                                    '/uri/' + quote(cap),
@@ -406,42 +406,14 @@ class TahoeFs(pyfuse3.Operations):
 
         return r.data
 
-    def _cache_chunks(self, cap: str, cache: Dict[int, bytes], chunks_to_download: List[int]) -> None:
-        if len(chunks_to_download) == 0:
-            return
-
-        ranges_to_download = []
-
-        lowest_index = chunks_to_download[0]
-        highest_index = lowest_index
-        for chunk_index in chunks_to_download[1:]:
-            if chunk_index == highest_index + 1:
-                highest_index = chunk_index
-            else:
-                ranges_to_download.append((lowest_index, highest_index))
-                lowest_index = chunk_index
-                highest_index = chunk_index
-        ranges_to_download.append((lowest_index, highest_index))
-
-        log.debug('downloading ranges %s', ranges_to_download)
-
-        for range_to_download in ranges_to_download:
-            c_start, c_end_incl = range_to_download
-            # make one large request for better throughput
-            r_start = c_start * self._chunk_size
-            r_end_excl = (c_end_incl+1) * self._chunk_size
-            log.debug('downloading range %s-%s (incl) bytes %s-%s (excl) size %skiB',
-                      c_start, c_end_incl, r_start, r_end_excl, (r_end_excl-r_start) // 1024)
-            data = self._download_range(cap, r_start, r_end_excl)
-            log.debug('size of returned data: %s', len(data))
-            # now, split up this large block back into chunks
-            for chunk_index in range(c_start, c_end_incl + 1):
-                local_start = (chunk_index-c_start) * self._chunk_size
-                local_end = (chunk_index-c_start+1) * self._chunk_size
-                chunk_data = data[local_start:local_end]
-                log.debug('storing chunk index %s in chunk cache, size %s (from %s to %s excl)',
-                          chunk_index, len(chunk_data), local_start, local_end)
-                cache[chunk_index] = chunk_data
+    async def _download_chunk_range(self, cap, c_start, c_end_incl) -> bytes:
+        # TODO if range is large enough, possibly download in parallel
+        r_start = c_start * self._chunk_size
+        r_end = (c_end_incl+1) * self._chunk_size
+        log.debug('downloading %s chunks %s-%s bytes %s-%s (size: %s KiB)',
+                  c_end_incl - c_start + 1, c_start, c_end_incl, r_start, r_end, ((r_end - r_start) // 1024))
+        data = await self._download_range(cap, r_start, r_end)
+        return data
 
     async def read(self, fh: int, off: int, size: int) -> bytes:
         (cap, cache) = cast(Tuple[str, Dict[int, bytes]], self._open_handles[fh])
@@ -456,50 +428,41 @@ class TahoeFs(pyfuse3.Operations):
             if size >= 65536:
                 prefetch_blocks = 1
                 if size >= 131072:
-                    prefetch_blocks = 2
-                if size >= 262144:
-                    prefetch_blocks = 4
-                if size >= 524288:
-                    prefetch_blocks = 8
+                    prefetch_blocks = 7
 
-                # chunks we actually need to read
-                r_start_chunk = off // self._chunk_size
-                r_end_chunk = (off + size) // self._chunk_size
+                c_start = off // self._chunk_size
+                prefetch_count = prefetch_blocks - ((off + size) // self._chunk_size) % prefetch_blocks
+                c_end_incl = -((off + size) // -self._chunk_size) + prefetch_count
 
-                # chunks we want to cache
-                c_start_chunk = r_start_chunk
-                prefetch_count = prefetch_blocks - r_end_chunk % prefetch_blocks
-                c_end_chunk = r_end_chunk + prefetch_count
-                log.debug('use chunk cache with start=%s, end=%s, chunks=%s, prefetch_blocks=%s, '
-                          'prefetch_count=%s, total_size=%skiB',
-                          c_start_chunk,
-                          c_end_chunk,
-                          c_end_chunk - c_start_chunk + 1,
-                          prefetch_blocks,
-                          prefetch_count,
-                          ((c_end_chunk - c_start_chunk + 1) * self._chunk_size) // 1024)
+                c_start_download = c_start
+                while c_start_download in cache:
+                    # this chunk is cached, we can start downloading from the next chunk
+                    c_start_download += 1
 
-                c_chunks = range(c_start_chunk, c_end_chunk+1)
-                chunks_to_download = [i for i in c_chunks if i not in cache]
-                log.debug('all chunks %s, chunks to download: %s', list(c_chunks), chunks_to_download)
-                self._cache_chunks(cap, cache, chunks_to_download)
+                cache_data = b''
+                for chunk_index in range(c_start, c_start_download):  # add our cache if we have any
+                    cache_data += cache[chunk_index]
 
-                # now that all data has been downloaded and cached, return the data we were asked for
+                if c_start_download <= c_end_incl:
+                    download_data = await self._download_chunk_range(cap, c_start_download, c_end_incl)
+                else:
+                    download_data = b''
 
-                data = b''
-                for chunk_index in range(r_start_chunk, r_end_chunk+1):
-                    log.debug('getting chunk %s from cache', chunk_index)
-                    data += cache[chunk_index]
+                data = cache_data + download_data
 
-                if len(cache) > self._max_cached_chunks:
-                    log.debug('chunk cache has surpassed max size, clearing cached chunks')
-                    cache.clear()
+                # split received data into chunks and store in cache
+                for chunk_index in range(c_start, c_end_incl + 1):
+                    local_start = (chunk_index-c_start) * self._chunk_size
+                    local_end = (chunk_index-c_start+1) * self._chunk_size
+                    chunk_data = data[local_start:local_end]
+                    cache[chunk_index] = chunk_data
 
+                # get the data we actually want to read
                 data_off = off % self._chunk_size
                 return data[data_off:data_off+size]
             else:
                 log.debug('don\'t use chunk cache')
-                return self._download_range(cap, off, off+size)
+                return await self._download_range(cap, off, off+size)
         else:
             raise NotImplementedError("cap not supported: " + cap)
 
