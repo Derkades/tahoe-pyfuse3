@@ -4,5 +4,7 @@ build/
 
 *.substvars
 *.changes
+*.buildinfo
+*.deb
 /upload/debian/tahoe-upload
 /*/debian/files
