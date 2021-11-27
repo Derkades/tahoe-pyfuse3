@@ -53,8 +53,8 @@ class TahoeFs(pyfuse3.Operations):
         self._inode_lock = threading.Lock()
         self._fh_lock = threading.Lock()
 
-        self._chunk_size = 2*128*1024  # nicely aligned with tahoe 128KiB segments
-        self._max_cached_chunks = 256*1024*1024 // self._chunk_size  # 256MiB
+        self._chunk_size = 2*128*1024  # nicely aligned with tahoe 128 KiB segments
+        self._max_cached_chunks = 64*1024*1024 // self._chunk_size  # 64 MiB
 
         self._common_headers = {
             'User-Agent': 'tahoe-mount',
@@ -415,6 +415,28 @@ class TahoeFs(pyfuse3.Operations):
         data = await self._download_range(cap, r_start, r_end)
         return data
 
+    def _prune_cache(self, c_start: int, cache: Dict[int, bytes]):
+        """
+        Deletes chunks from cache if it's too large
+        """
+        if len(cache) < self._max_cached_chunks:
+            return
+
+        log.debug('chunk cache has surpassed max size, clearing cached chunks')
+        # chunks before our current chunk are likely to never be read again, try to clear those first
+        to_clear = []
+        for chunk_index in cache.keys():
+            if chunk_index >= c_start:
+                break
+            to_clear.append(chunk_index)
+
+        for chunk_index in to_clear:
+            del cache[chunk_index]
+
+        if len(cache) > self._max_cached_chunks:
+            log.debug("cache is still to large after first pass, clearing entirely")
+            cache.clear()
+
     async def read(self, fh: int, off: int, size: int) -> bytes:
         (cap, cache) = cast(Tuple[str, Dict[int, bytes]], self._open_handles[fh])
 
@@ -456,6 +478,9 @@ class TahoeFs(pyfuse3.Operations):
                     local_end = (chunk_index-c_start+1) * self._chunk_size
                     chunk_data = data[local_start:local_end]
                     cache[chunk_index] = chunk_data
+
+                # prune cache, we can safely do this now since we won't read from cache anymore (until the next read)
+                self._prune_cache(c_start, cache)
 
                 # get the data we actually want to read
                 data_off = off % self._chunk_size
