@@ -426,13 +426,13 @@ class TahoeFs(pyfuse3.Operations):
         elif cap_type in {'CHK', 'MDMF', 'MDMF-RO', 'SSK', 'SSK-RO'}:
             log.debug('read off=%skiB, size=%skiB', off // 1024, size // 1024)
             if size >= 65536:
-                prefetch_blocks = 1
+                fetch_chunk_count = 2
                 if size >= 131072:
-                    prefetch_blocks = 7
+                    fetch_chunk_count = 8
 
                 c_start = off // self._chunk_size
-                prefetch_count = prefetch_blocks - ((off + size) // self._chunk_size) % prefetch_blocks
-                c_end_incl = -((off + size) // -self._chunk_size) + prefetch_count
+                c_end_incl = -((off + size) // -self._chunk_size)
+                c_end_incl += fetch_chunk_count - c_end_incl % fetch_chunk_count
 
                 c_start_download = c_start
                 while c_start_download in cache:
