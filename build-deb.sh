@@ -1,4 +1,6 @@
 #!/bin/bash
 set -ex
-docker build -t tahoe-deb-builder -f Dockerfile.deb-build .
-docker run --rm -it --mount "type=bind,source=$(pwd),target=/data" --user "$(id -u)" tahoe-deb-builder
+docker build -t tahoe-mount-deb-builder -f Dockerfile.deb-build --build-arg UID=$(id -u) --build-arg GID=$(id -g) .
+ID=$(docker create tahoe-mount-deb-builder)
+docker cp "$ID:/data/debs/." .
+docker rm -v $ID

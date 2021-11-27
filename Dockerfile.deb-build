@@ -1,6 +1,7 @@
 # Oldest libc version we will support for static builds
 FROM debian:buster as builder-base
 
+# TODO some of these packages are probably no longer necessary
 RUN apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
             debhelper \
@@ -14,8 +15,19 @@ RUN apt-get update && \
 
 RUN pip3 install --upgrade pip setuptools wheel
 
-RUN pip3 install pyinstaller pyfuse3 urllib3 requests tqdm
+RUN pip3 install pyinstaller urllib3 pyfuse3
 
-WORKDIR /data
-COPY build-deb-entrypoint.sh /build.sh
-ENTRYPOINT ["bash", "/build.sh"]
+ARG UID=0 GID=0
+
+RUN mkdir /data && \
+    chown $UID:$GID /data && \
+    echo User $UID:$GID
+
+USER $UID:$GID
+
+COPY --chown=$UID:$GID . /data/build
+WORKDIR /data/build
+
+RUN dpkg-buildpackage -b --no-sign -tc && \
+    mkdir ../debs && \
+    cp ../*.deb ../debs
