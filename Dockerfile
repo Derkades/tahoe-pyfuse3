@@ -10,7 +10,7 @@ RUN pip install pyfuse3 urllib3
 WORKDIR /data
 COPY . .
 
-RUN pyinstaller --onefile --name tahoe-mount mount.py
+RUN pyinstaller --name tahoe-mount mount.py
 
 ENTRYPOINT ["bash", "/entrypoint.sh"]
 
@@ -18,4 +18,4 @@ FROM debian:bullseye-slim
 
 COPY --from=builder /data/dist/tahoe-mount /tahoe-mount
 
-ENTRYPOINT ["/tahoe-mount"]
+ENTRYPOINT ["/tahoe-mount/tahoe-mount"]
