@@ -450,7 +450,7 @@ class TahoeFs(pyfuse3.Operations):
             if size >= 65536:
                 fetch_chunk_count = 2
                 if size >= 131072:
-                    fetch_chunk_count = 8
+                    fetch_chunk_count = 4
 
                 c_start = off // self._chunk_size
                 c_end_incl = -((off + size) // -self._chunk_size)
