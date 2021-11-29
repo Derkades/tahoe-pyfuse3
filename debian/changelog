@@ -1,3 +1,11 @@
+tahoe-mount (1.1.0-1) any; urgency=medium
+
+  * Performance improvements to read prefetch system.
+  * Fixed lookup of file always returning ENOTDIR when mount root has never received a lookup.
+  * Added a half smart algorithm for pruning old cache so it doesn't eat all your memory.
+
+ -- Robin Slot <robin@rkslot.nl>  Mon, 29 Nov 2021 23:25:15 +0100
+
 tahoe-mount (1.0.0-1) any; urgency=medium
 
   * Initial release
