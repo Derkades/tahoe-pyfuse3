@@ -79,10 +79,7 @@ class TahoeFs(pyfuse3.Operations):
                                                      retries=retry_config,
                                                      timeout=timeout_config)
 
-        try:
-            self._find_cap_in_parent(pyfuse3.ROOT_INODE, None)
-        except pyfuse3.FUSEError:
-            pass
+        self._find_cap_in_parent(pyfuse3.ROOT_INODE, None)
 
     def _create_handle(self, data: Union[Tuple[str, Dict[int, bytes]], Dict[str, Any]]) -> int:
         with self._fh_lock:
@@ -112,7 +109,7 @@ class TahoeFs(pyfuse3.Operations):
                 return None
 
     def _cap_is_dir(self, cap: str) -> bool:
-        return cap.split(':')[1] in {'DIR2', 'DIR2-MDMF'}
+        return cap.split(':')[1] in {'DIR2', 'DIR2-RO', 'DIR2-MDMF'}
 
     def _cap_from_child_json(self, json: list) -> str:
         json2: Dict[str, Any] = json[1]
@@ -134,6 +131,7 @@ class TahoeFs(pyfuse3.Operations):
             raise ValueError(f'parent_inode={parent_inode} unknown')
 
         if not self._cap_is_dir(cap):
+            log.warning('_find_cap_in_parent() was called with parent_inode=%s name=%s but this inode is not a directory', parent_inode, name)
             raise(FUSEError(errno.ENOTDIR))
 
         try:
@@ -150,7 +148,8 @@ class TahoeFs(pyfuse3.Operations):
         r_json = json.loads(r.data.decode())
 
         if name is None:
-            raise FUSEError(errno.ENOENT)
+            # this function is called with name=None once at startup to init the root directory
+            return None
 
         for child_name in r_json[1]['children'].keys():
             if child_name == name:
@@ -223,6 +222,7 @@ class TahoeFs(pyfuse3.Operations):
         return self._getattr(cap)
 
     async def lookup(self, parent_inode: int, name: bytes, _ctx: pyfuse3.RequestContext) -> pyfuse3.EntryAttributes:
+        log.debug('lookup parent_inode=%s name=%s', parent_inode, name)
         cap: str = self._find_cap_in_parent(parent_inode, name.decode())
         return self._getattr(cap)
 
@@ -450,7 +450,7 @@ class TahoeFs(pyfuse3.Operations):
             if size >= 65536:
                 fetch_chunk_count = 2
                 if size >= 131072:
-                    fetch_chunk_count = 4
+                    fetch_chunk_count = 8
 
                 c_start = off // self._chunk_size
                 c_end_incl = -((off + size) // -self._chunk_size)
