@@ -11,7 +11,7 @@ Description: FUSE mount client for Tahoe-LAFS
 Conflicts: tahoe-mount-static
 
 Package: tahoe-mount-static
-Architecture: all
+Architecture: amd64
 Description: FUSE mount client for Tahoe-LAFS (static build)
 Conflicts: tahoe-mount
 Provides: tahoe-mount
