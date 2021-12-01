@@ -29,6 +29,21 @@ else:
 log = logging.getLogger(__name__)
 
 
+class HandleData():
+    pass
+
+
+class FileHandleData(HandleData):
+    def __init__(self, cap: str, cache: Dict[int, bytes]):
+        self.cap = cap
+        self.cache = cache
+        
+
+class DirHandleData(HandleData):
+    def __init__(self, children: Dict[str, Any]):
+        self.children = children
+
+
 class TahoeFs(pyfuse3.Operations):
 
     def __init__(self, node_url: str, root_cap: str, read_only: bool,
@@ -49,7 +64,8 @@ class TahoeFs(pyfuse3.Operations):
         self._cap_to_inode_dict = {root_cap: pyfuse3.ROOT_INODE}
         self._next_inode = pyfuse3.ROOT_INODE + 1
         # dict value is (cap, chunk_cache) for files and dict[child_name, child_json] for directories
-        self._open_handles: Dict[int, Union[Tuple[str, Dict[int, bytes]], Dict[str, Any]]] = {}
+        # self._open_handles: Dict[int, Union[Tuple[str, Dict[int, bytes]], Dict[str, Any]]] = {}
+        self._open_handles: Dict[int, HandleData] = {}
         self._inode_lock = threading.Lock()
         self._fh_lock = threading.Lock()
 
@@ -79,27 +95,40 @@ class TahoeFs(pyfuse3.Operations):
                                                      retries=retry_config,
                                                      timeout=timeout_config)
 
-        self._find_cap_in_parent(pyfuse3.ROOT_INODE, None)
+        try:
+            self._find_cap_in_parent(pyfuse3.ROOT_INODE, None)
+        except ValueError:
+            pass
 
-    def _create_handle(self, data: Union[Tuple[str, Dict[int, bytes]], Dict[str, Any]]) -> int:
+    def _create_handle(self, data: HandleData) -> int:
         with self._fh_lock:
-            for i in range(1000):
-                if i not in self._open_handles:
-                    self._open_handles[i] = data
-                    return i
+            for fh in range(1000):
+                if fh not in self._open_handles:
+                    self._open_handles[fh] = data
+                    return fh
 
-            raise Exception('out of handles')
+            raise FUSEError(errno.EMFILE)
+        
+    def _get_handle(self, fh: int) -> Optional[HandleData]:
+        with self._fh_lock:
+            if fh in self._open_handles:
+                return self._open_handles[fh]
+            else:
+                return None
+        
+    def _del_hande(self, fh: int) -> None:
+        with self._fh_lock:
+            del self._open_handles[fh]
 
     def _cap_to_inode(self, cap: str) -> int:
         with self._inode_lock:
             if cap in self._cap_to_inode_dict:
                 return self._cap_to_inode_dict[cap]
 
-            inode = self._next_inode
-            self._next_inode = inode + 1
-            self._inode_to_cap_dict[inode] = cap
-            self._cap_to_inode_dict[cap] = inode
-            return inode
+            self._inode_to_cap_dict[self._next_inode] = cap
+            self._cap_to_inode_dict[cap] = self._next_inode
+            self._next_inode += 1
+            return self._next_inode - 1
 
     def _inode_to_cap(self, inode: int) -> Optional[str]:
         with self._inode_lock:
@@ -149,7 +178,7 @@ class TahoeFs(pyfuse3.Operations):
 
         if name is None:
             # this function is called with name=None once at startup to init the root directory
-            return None
+            raise ValueError("name is None")
 
         for child_name in r_json[1]['children'].keys():
             if child_name == name:
@@ -244,14 +273,15 @@ class TahoeFs(pyfuse3.Operations):
 
         r_json = json.loads(r.data.decode())
         children: Dict[str, Any] = r_json[1]['children']
-        return self._create_handle(children)
+        return self._create_handle(DirHandleData(children))
 
     async def readdir(self, fh: int, start_id: int, token: pyfuse3.ReaddirToken) -> None:
-        if fh not in self._open_handles:
+        handle_data = cast(Optional[DirHandleData], self._get_handle(fh))
+        
+        if handle_data is None:
             raise ValueError(f'file handle is not open? {fh}')
 
-        # children: Dict[str, List[Any]] = self._open_handles[fh][1]['children']
-        children: Dict[str, Any] = cast(Dict[str, Any], self._open_handles[fh])
+        children: Dict[str, Any] = handle_data.children
 
         i = 0
         for child_name in children.keys():
@@ -265,7 +295,7 @@ class TahoeFs(pyfuse3.Operations):
         return
 
     async def releasedir(self, fh: int) -> None:
-        del self._open_handles[fh]
+        self._del_hande(fh)
 
     async def mkdir(self, parent_inode: int, name: bytes,
                     _mode: int, _ctx: pyfuse3.RequestContext) -> pyfuse3.EntryAttributes:
@@ -379,8 +409,7 @@ class TahoeFs(pyfuse3.Operations):
 
         cap = self._inode_to_cap(inode)
         assert cap
-        data: Tuple[str, Dict[int, bytes]] = (cap, {})  # second element in tuple is for chunk cache
-        fh = self._create_handle(data)
+        fh = self._create_handle(FileHandleData(cap, cache={}))
         log.debug('open fh %s', fh)
         return pyfuse3.FileInfo(fh=fh)
 
@@ -438,7 +467,13 @@ class TahoeFs(pyfuse3.Operations):
             cache.clear()
 
     async def read(self, fh: int, off: int, size: int) -> bytes:
-        (cap, cache) = cast(Tuple[str, Dict[int, bytes]], self._open_handles[fh])
+        # (cap, cache) = cast(Tuple[str, Dict[int, bytes]], self._open_handles[fh])
+        handle_data = cast(Optional[FileHandleData], self._get_handle(fh))
+        if handle_data is None:
+            return FUSEError(errno.ENOENT)  # TODO What is the appropriate errno for invalid file handle?
+        
+        cap = handle_data.cap
+        cache = handle_data.cache
 
         cap_type = cap.split(':')[1]
 
@@ -500,7 +535,11 @@ class TahoeFs(pyfuse3.Operations):
         start_chunk = off // self._chunk_size
         end_chunk = (off + len(buf)) // self._chunk_size
         log.debug('write off=%s size=%s (to %s)', off, len(buf), off + len(buf))
-        (cap, cache) = self._open_handles[fh]
+        
+        data = self._get_handle(fh)
+        cap: str = data.cap
+        cache: Dict[int, bytes] = data.cache
+        
         for chunk_index in range(start_chunk, end_chunk + 1):
             # ideally we should update the local cache instead of destroying it
             if chunk_index in cache:
@@ -522,7 +561,7 @@ class TahoeFs(pyfuse3.Operations):
 
     async def release(self, fh: int) -> None:
         log.debug('release fh %s', fh)
-        del self._open_handles[fh]
+        self._del_hande(fh)
 
     async def unlink(self, parent_inode: int, name: bytes, ctx: pyfuse3.RequestContext) -> None:
         if self._read_only:
