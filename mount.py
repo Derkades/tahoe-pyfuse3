@@ -37,7 +37,8 @@ class FileHandleData(HandleData):
     def __init__(self, cap: str, cache: Dict[int, bytes]):
         self.cap = cap
         self.cache = cache
-        
+        self.read_count = 0
+
 
 class DirHandleData(HandleData):
     def __init__(self, children: Dict[str, Any]):
@@ -108,14 +109,14 @@ class TahoeFs(pyfuse3.Operations):
                     return fh
 
             raise FUSEError(errno.EMFILE)
-        
+
     def _get_handle(self, fh: int) -> Optional[HandleData]:
         with self._fh_lock:
             if fh in self._open_handles:
                 return self._open_handles[fh]
             else:
                 return None
-        
+
     def _del_hande(self, fh: int) -> None:
         with self._fh_lock:
             del self._open_handles[fh]
@@ -277,7 +278,7 @@ class TahoeFs(pyfuse3.Operations):
 
     async def readdir(self, fh: int, start_id: int, token: pyfuse3.ReaddirToken) -> None:
         handle_data = cast(Optional[DirHandleData], self._get_handle(fh))
-        
+
         if handle_data is None:
             raise ValueError(f'file handle is not open? {fh}')
 
@@ -471,7 +472,7 @@ class TahoeFs(pyfuse3.Operations):
         handle_data = cast(Optional[FileHandleData], self._get_handle(fh))
         if handle_data is None:
             return FUSEError(errno.ENOENT)  # TODO What is the appropriate errno for invalid file handle?
-        
+
         cap = handle_data.cap
         cache = handle_data.cache
 
@@ -483,13 +484,21 @@ class TahoeFs(pyfuse3.Operations):
         elif cap_type in {'CHK', 'MDMF', 'MDMF-RO', 'SSK', 'SSK-RO'}:
             log.debug('read off=%skiB, size=%skiB', off // 1024, size // 1024)
             if size >= 65536:
-                fetch_chunk_count = 2
                 if size >= 131072:
-                    fetch_chunk_count = 8
+                    prefetch_chunk_count = 2
+                else:
+                    prefetch_chunk_count = 1
+
+                if handle_data.read_count > 3:
+                    prefetch_chunk_count *= 4
+                elif handle_data.read_count > 1:
+                    prefetch_chunk_count *= 2
+
+                handle_data.read_count += 1
 
                 c_start = off // self._chunk_size
                 c_end_incl = -((off + size) // -self._chunk_size)
-                c_end_incl += fetch_chunk_count - c_end_incl % fetch_chunk_count
+                c_end_incl += prefetch_chunk_count - c_end_incl % prefetch_chunk_count
 
                 c_start_download = c_start
                 while c_start_download in cache:
@@ -535,11 +544,11 @@ class TahoeFs(pyfuse3.Operations):
         start_chunk = off // self._chunk_size
         end_chunk = (off + len(buf)) // self._chunk_size
         log.debug('write off=%s size=%s (to %s)', off, len(buf), off + len(buf))
-        
+
         data = self._get_handle(fh)
         cap: str = data.cap
         cache: Dict[int, bytes] = data.cache
-        
+
         for chunk_index in range(start_chunk, end_chunk + 1):
             # ideally we should update the local cache instead of destroying it
             if chunk_index in cache:
