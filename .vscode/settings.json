@@ -6,5 +6,6 @@
     ],
     "python.linting.pycodestyleArgs": [
       "--max-line-length=120",
-    ]
+    ],
+    "python.pythonPath": "venv/bin/python"
   }
