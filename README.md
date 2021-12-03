@@ -29,7 +29,7 @@ To build these packages locally, run `./build-deb.sh`.
 - Writing to files (broken due to tahoe bug, see below)
 
 ## Caveats
-- Due to [severe file corruption bugs in the Tahoe-LAFS REST API](https://tahoe-lafs.org/trac/tahoe-lafs/ticket/3818) when writing to MDMF/SDMF mutable files, the file system won't allow writes (not even without `ro`). To upload files, use the file upload script (see below).
+- Due to [severe file corruption bugs in the Tahoe-LAFS REST API](https://tahoe-lafs.org/trac/tahoe-lafs/ticket/3818) when writing to MDMF/SDMF mutable files, the file system won't allow writes (not even without `ro`). To upload files, use my related project [tahoe-upload](https://github.com/Derkades/tahoe-upload).
 - Mtime/ctime/crtime is not set properly. This will be addressed soon.
 
 ## Usage
