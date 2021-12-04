@@ -50,7 +50,7 @@ class TahoeFs(pyfuse3.Operations):
     def __init__(self, node_url: str, root_cap: str, read_only: bool,
                  uid: int, gid: int, dir_mode: int, file_mode: int) -> None:
         super(TahoeFs, self).__init__()
-        self.supports_dot_lookup = False  # maybe it does?
+        self.supports_dot_lookup = False  # Tahoe-LAFS supports directory symlinks, we can't know a directory's parent
         self.enable_writeback_cache = False
         self.enable_acl = False
 
@@ -64,8 +64,6 @@ class TahoeFs(pyfuse3.Operations):
         self._inode_to_cap_dict = {pyfuse3.ROOT_INODE: root_cap}
         self._cap_to_inode_dict = {root_cap: pyfuse3.ROOT_INODE}
         self._next_inode = pyfuse3.ROOT_INODE + 1
-        # dict value is (cap, chunk_cache) for files and dict[child_name, child_json] for directories
-        # self._open_handles: Dict[int, Union[Tuple[str, Dict[int, bytes]], Dict[str, Any]]] = {}
         self._open_handles: Dict[int, HandleData] = {}
         self._inode_lock = threading.Lock()
         self._fh_lock = threading.Lock()
@@ -468,7 +466,6 @@ class TahoeFs(pyfuse3.Operations):
             cache.clear()
 
     async def read(self, fh: int, off: int, size: int) -> bytes:
-        # (cap, cache) = cast(Tuple[str, Dict[int, bytes]], self._open_handles[fh])
         handle_data = cast(Optional[FileHandleData], self._get_handle(fh))
         if handle_data is None:
             return FUSEError(errno.ENOENT)  # TODO What is the appropriate errno for invalid file handle?
