@@ -14,8 +14,10 @@ RUN apt-get update && \
             libfuse3-dev
 
 RUN pip3 install --upgrade pip setuptools wheel
+RUN pip3 install pyinstaller
 
-RUN pip3 install pyinstaller urllib3 pyfuse3
+COPY requirements.txt /requirements
+RUN pip3 install -r /requirements
 
 ARG UID=0 GID=0
 

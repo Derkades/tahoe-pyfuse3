@@ -5,7 +5,9 @@ RUN apt-get update
 RUN pip install pyinstaller
 
 RUN apt-get install -y libfuse3-dev
-RUN pip install pyfuse3 urllib3
+
+COPY requirements.txt /requirements
+RUN pip install -r /requirements
 
 WORKDIR /data
 COPY . .
