@@ -4,9 +4,9 @@
 
 ### Native python
 
-Install dependencies (debian):
+Install dependencies (probably in a venv):
 ```
-apt install python3 python3-urllib3 python3-pyfuse3
+pip3 install -r requirements.txt
 ```
 
 Run `python3 mount.py`
