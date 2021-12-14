@@ -2,6 +2,7 @@
 import os
 import threading
 import logging
+import logging.handlers
 import base64
 import json
 from typing import Optional, List, Dict, Any, Tuple, Union, cast
@@ -588,10 +589,14 @@ class TahoeFs(pyfuse3.Operations):
             raise FUSEError(errno.EREMOTEIO)
 
 
-def init_logging(debug: bool = False) -> None:
-    formatter = logging.Formatter('%(asctime)s.%(msecs)03d %(threadName)s: '
-                                  '[%(name)s] %(message)s', datefmt="%Y-%m-%d %H:%M:%S")
-    handler = logging.StreamHandler()
+def init_logging(syslog: bool, debug: bool = False) -> None:
+    if syslog:
+        handler = logging.handlers.SysLogHandler(address='/dev/log')
+        formatter = logging.Formatter('tahoe-mount: [%(threadName)s] [%(name)s] %(message)s')
+    else:
+        handler = logging.StreamHandler()
+        formatter = logging.Formatter('%(asctime)s.%(msecs)03d [%(threadName)s] [%(name)s] %(message)s', datefmt="%Y-%m-%d %H:%M:%S")
+
     handler.setFormatter(formatter)
     root_logger = logging.getLogger()
     if debug:
@@ -633,6 +638,7 @@ def main() -> None:
     debug = False
     debug_fuse = False
     fork = False
+    syslog = False
 
     for opt in args.o.split(','):
         if '=' in opt:
@@ -666,6 +672,8 @@ def main() -> None:
                 fork = True
             elif opt == 'nofork':
                 fork = False
+            elif opt == 'syslog':
+                syslog = True
             else:
                 print('Unsupported option:', opt)
 
@@ -673,12 +681,12 @@ def main() -> None:
         print('Specify node_url option')
         exit(1)
 
-    init_logging(debug)
+    init_logging(syslog, debug)
 
     log.info('Using settings: node_url=%s uid=%s gid=%s file_mode=%s dir_mode=%s '
-             'read_only=%s allow_other=%s debug=%s debug_fuse=%s fork=%s',
+             'read_only=%s allow_other=%s debug=%s debug_fuse=%s fork=%s syslog=%s',
              node_url, uid, gid, oct(file_mode)[2:], oct(dir_mode)[2:],
-             read_only, allow_other, debug, debug_fuse, fork)
+             read_only, allow_other, debug, debug_fuse, fork, syslog)
 
     if fork:
         pid = os.fork()

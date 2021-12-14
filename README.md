@@ -51,12 +51,13 @@ Options:
 | `debug_fuse` | none | Enables FUSE debug logging
 | `fork` | none | Fork before entering main filesystem loop, required for use in /etc/fstab
 | `nofork` | none | Do not fork, see above (default)
+| `syslog` | none | Log to syslog, instead of stdout
 
-Example:
+Example (foreground):
 ```
-mount.tahoe URI:DIR2:fz<snip>ge:lz<snip>ra /mnt/tahoe -o node_url=http://localhost:3456,file_mode=444,dir_mode=555,ro,nofork,allow_other
+mount.tahoe URI:DIR2:fz<snip>ge:lz<snip>ra /mnt/tahoe -o node_url=http://localhost:3456,file_mode=444,dir_mode=555,ro,allow_other,nofork
 ```
 fstab:
 ```
-URI:DIR2:fz<snip>ge:lz<snip>ra /mnt/tahoe tahoe node_url=http://localhost:3456,file_mode=444,dir_mode=555,ro,nofork,allow_other
+URI:DIR2:fz<snip>ge:lz<snip>ra /mnt/tahoe tahoe node_url=http://localhost:3456,file_mode=444,dir_mode=555,ro,allow_other,fork,syslog
 ```
