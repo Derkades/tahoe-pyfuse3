@@ -1,3 +1,11 @@
+tahoe-mount (1.2.0-1) any; urgency=medium
+
+  * Adjust prefetch size based on per-file read count
+  * Added option to log to syslog
+  * Code cleanup, documentation fixes and improvements
+
+ -- Robin Slot <robin@rkslot.nl>  Sun, 09 Jan 2022 20:34:34 +0100
+
 tahoe-mount (1.1.0-1) any; urgency=medium
 
   * Performance improvements to read prefetch system.
