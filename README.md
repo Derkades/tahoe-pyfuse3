@@ -55,9 +55,12 @@ Options:
 
 Example (foreground):
 ```
-mount.tahoe URI:DIR2:fz<snip>ge:lz<snip>ra /mnt/tahoe -o node_url=http://localhost:3456,file_mode=444,dir_mode=555,ro,allow_other,nofork
+mount.tahoe -o node_url=http://localhost:3456,file_mode=444,dir_mode=555,ro,allow_other,nofork URI:DIR2:... /mnt/tahoe
+mount -t tahoe -o node_url=http://localhost:3456,file_mode=444,dir_mode=555,ro,allow_other,nofork URI:DIR2:... /mnt/tahoe
 ```
 fstab:
 ```
-URI:DIR2:fz<snip>ge:lz<snip>ra /mnt/tahoe tahoe node_url=http://localhost:3456,file_mode=444,dir_mode=555,ro,allow_other,fork,syslog
+URI:DIR2:... /mnt/tahoe tahoe node_url=http://localhost:3456,file_mode=444,dir_mode=555,ro,allow_other,fork,syslog
 ```
+
+Note: If you installed `tahoe-mount-static` instead of `tahoe-mount`, the `/usr/sbin/mount.tahoe` mount helper program is not directly executable but a symlink. This doesn't seem to work with with `mount` and fstab and procudes an `unknown filesystem type 'tahoe'` error. As a workaround, use `fuse./usr/lib/tahoe-mount/tahoe-mount` as the filesystem type instead of `tahoe`.
