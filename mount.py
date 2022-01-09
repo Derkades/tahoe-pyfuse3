@@ -654,7 +654,7 @@ def main() -> None:
             elif k == 'dir_mode':
                 dir_mode = int(v, 8)
             else:
-                print('Unsupported option:', k)
+                print('Ignoring unsupported option:', k)
         else:
             if opt == 'ro':
                 read_only = True
@@ -675,7 +675,7 @@ def main() -> None:
             elif opt == 'syslog':
                 syslog = True
             else:
-                print('Unsupported option:', opt)
+                print('Ignoring unsupported option:', opt)
 
     if not node_url:
         print('Specify node_url option')
