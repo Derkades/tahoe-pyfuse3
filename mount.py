@@ -10,6 +10,7 @@ from typing import Optional, List, Dict, Any, Tuple, Union, cast
 from urllib.parse import urlparse, quote
 import urllib3
 from urllib3.exceptions import HTTPError
+from multiprocessing.pool import ThreadPool
 
 import argparse
 import errno
@@ -87,14 +88,16 @@ class TahoeFs(pyfuse3.Operations):
                                                     port,
                                                     headers=self._common_headers,
                                                     retries=retry_config,
-                                                    timeout=timeout_config)
+                                                    timeout=timeout_config,
+                                                    maxsize=2)
         elif parsed_url.scheme == 'https':
             port = parsed_url.port if parsed_url.port is not None else 443
             self._pool = urllib3.HTTPSConnectionPool(parsed_url.hostname,
                                                      parsed_url.port,
                                                      headers=self._common_headers,
                                                      retries=retry_config,
-                                                     timeout=timeout_config)
+                                                     timeout=timeout_config,
+                                                     maxsize=2)
 
         try:
             self._find_cap_in_parent(pyfuse3.ROOT_INODE, None)
@@ -414,12 +417,12 @@ class TahoeFs(pyfuse3.Operations):
         log.debug('open fh %s', fh)
         return pyfuse3.FileInfo(fh=fh)
 
-    async def _download_range(self, cap: str, start: int, end_excl: int) -> bytes:
+    def _download_range(self, cap: str, start: int, end_excl: int) -> bytes:
         try:
             r = self._pool.request('GET',
                                    '/uri/' + quote(cap),
                                    headers={
-                                       **self._common_headers,
+                                    #    **self._common_headers,
                                        'Range': f'bytes={start}-{end_excl - 1}'
                                    })
         except HTTPError as e:
@@ -434,17 +437,30 @@ class TahoeFs(pyfuse3.Operations):
             log.warning('unexpected status code %s _download_range() GET request', r.status)
             raise FUSEError(errno.EREMOTEIO)
 
+        log.debug('done')
+
         return r.data
 
     async def _download_chunk_range(self, cap, c_start, c_end_incl) -> bytes:
         start_time = time.perf_counter()
 
-        # TODO if range is large enough, possibly download in parallel
         r_start = c_start * self._chunk_size
         r_end = (c_end_incl+1) * self._chunk_size
         log.debug('downloading %s chunks %s-%s bytes %s-%s (size: %s KiB)',
                   c_end_incl - c_start + 1, c_start, c_end_incl, r_start, r_end, (r_end - r_start) // 1024)
-        data = await self._download_range(cap, r_start, r_end)
+
+        if c_end_incl - c_start + 1 >= 8:
+            log.debug('parallel download')
+            r_middle = r_start + (r_end - r_start) // 2
+            with ThreadPool(2) as p:
+                datas = p.starmap(self._download_range,
+                          ((cap, r_start, r_middle + 1),
+                           (cap, r_middle, r_end)
+                          ))
+                data = datas[0] + datas[1]
+
+        else:
+            data = self._download_range(cap, r_start, r_end)
 
         duration = time.perf_counter() - start_time
         throughput = (r_end - r_start) / (duration * 1024 * 1024)
@@ -495,7 +511,7 @@ class TahoeFs(pyfuse3.Operations):
                     prefetch_chunk_count = 1
 
                 if handle_data.read_count > 3:
-                    prefetch_chunk_count *= 4
+                    prefetch_chunk_count *= 8
                 elif handle_data.read_count > 1:
                     prefetch_chunk_count *= 2
 
@@ -535,8 +551,8 @@ class TahoeFs(pyfuse3.Operations):
                 data_off = off % self._chunk_size
                 return data[data_off:data_off+size]
             else:
-                log.debug('don\'t use chunk cache')
-                return await self._download_range(cap, off, off+size)
+                log.debug("don't use chunk cache")
+                return self._download_range(cap, off, off+size)
         else:
             raise NotImplementedError("cap not supported: " + cap)
 
