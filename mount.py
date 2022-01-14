@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import os
+import time
 import threading
 import logging
 import logging.handlers
@@ -436,12 +437,18 @@ class TahoeFs(pyfuse3.Operations):
         return r.data
 
     async def _download_chunk_range(self, cap, c_start, c_end_incl) -> bytes:
+        start_time = time.perf_counter()
+
         # TODO if range is large enough, possibly download in parallel
         r_start = c_start * self._chunk_size
         r_end = (c_end_incl+1) * self._chunk_size
         log.debug('downloading %s chunks %s-%s bytes %s-%s (size: %s KiB)',
-                  c_end_incl - c_start + 1, c_start, c_end_incl, r_start, r_end, ((r_end - r_start) // 1024))
+                  c_end_incl - c_start + 1, c_start, c_end_incl, r_start, r_end, (r_end - r_start) // 1024)
         data = await self._download_range(cap, r_start, r_end)
+
+        duration = time.perf_counter() - start_time
+        throughput = (r_end - r_start) / (duration * 1024 * 1024)
+        log.debug('downloaded in %.1fs at %.1f Mb/s or %.1f MB/s', duration, throughput*8, throughput)
         return data
 
     def _prune_cache(self, c_start: int, cache: Dict[int, bytes]):
