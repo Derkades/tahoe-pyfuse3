@@ -4,8 +4,8 @@
       "--good-names=i,j,k,e,fh",
       "--max-line-length=120"
     ],
-    "python.linting.pycodestyleArgs": [
-      "--max-line-length=120",
-    ],
-    "python.pythonPath": "venv/bin/python"
+    "python.pythonPath": "venv/bin/python",
+    "python.linting.pycodestyleEnabled": false,
+    "python.linting.pylintEnabled": true,
+    "python.linting.enabled": true
   }
