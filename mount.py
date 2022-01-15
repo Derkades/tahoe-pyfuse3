@@ -9,17 +9,17 @@ import json
 import argparse
 import errno
 import stat
-from typing import Optional, List, Dict, Any, Tuple, Union, cast
+from typing import Optional, List, Dict, Any, cast
 from urllib.parse import urlparse, quote
+from multiprocessing.pool import ThreadPool
 
 import urllib3
 from urllib3.exceptions import HTTPError
 from urllib3 import HTTPConnectionPool, HTTPSConnectionPool
 from urllib3.connectionpool import ConnectionPool
-from multiprocessing.pool import ThreadPool
 
 import pyfuse3
-import _pyfuse3  # for pyinstaller
+import _pyfuse3  # for pyinstaller pylint: disable=unused-import
 from pyfuse3 import FUSEError
 import trio
 
@@ -228,7 +228,7 @@ class TahoeFs(pyfuse3.Operations):
                                                            '/uri/' + quote(cap) + '?t=json')
             except HTTPError as e:
                 log.warning('error during GET request for _getattr(): %s', e)
-                raise FUSEError(errno.EREMOTEIO)
+                raise FUSEError(errno.EREMOTEIO) from e
 
             if resp.status != 200:
                 log.warning('unexpected status code %s _getattr() MDMF(-RO) GET request', resp.status)
@@ -367,8 +367,8 @@ class TahoeFs(pyfuse3.Operations):
                 raise pyfuse3.FUSEError(errno.ENOTDIR)
 
             try:
-                resp = self._get_connection_pool().request('PUT',
-                                                           '/uri/' + quote(parent_cap) + '/' + quote(name.decode()) + "?format=MDMF")
+                url = '/uri/' + quote(parent_cap) + '/' + quote(name.decode()) + "?format=MDMF"
+                resp = self._get_connection_pool().request('PUT', url)
             except HTTPError as e:
                 log.warning('error during PUT request for create(): %s', e)
                 raise FUSEError(errno.EREMOTEIO) from e
@@ -463,13 +463,13 @@ class TahoeFs(pyfuse3.Operations):
         if c_end_incl - c_start + 1 >= 8:
             log.debug('parallel download')
             r_middle = r_start + (r_end - r_start) // 2
-            with ThreadPool(2) as p:
-                datas = p.starmap(self._download_range,
-                          ((cap, r_start, r_middle + 1),
-                           (cap, r_middle, r_end)
-                          ))
-                data = datas[0] + datas[1]
-
+            with ThreadPool(2) as pool:
+                args = (
+                    (cap, r_start, r_middle + 1),
+                    (cap, r_middle, r_end)
+                )
+                datas = pool.starmap(self._download_range, args)
+                data = b''.join(datas)
         else:
             data = self._download_range(cap, r_start, r_end)
 
@@ -629,7 +629,8 @@ def init_logging(syslog: bool, debug: bool = False) -> None:
         formatter = logging.Formatter('tahoe-mount: [%(threadName)s] [%(name)s] %(message)s')
     else:
         handler = logging.StreamHandler()
-        formatter = logging.Formatter('%(asctime)s.%(msecs)03d [%(threadName)s] [%(name)s] %(message)s', datefmt="%Y-%m-%d %H:%M:%S")
+        formatter = logging.Formatter('%(asctime)s.%(msecs)03d [%(threadName)s] [%(name)s] %(message)s',
+                                      datefmt="%Y-%m-%d %H:%M:%S")
 
     handler.setFormatter(formatter)
     root_logger = logging.getLogger()
@@ -729,7 +730,7 @@ def main() -> None:
         if pid == 0:
             pass
         else:
-            os._exit(0)
+            os._exit(0)  # pylint: disable=protected-access
 
     testfs = TahoeFs(node_urls, root_cap, read_only, uid, gid, dir_mode, file_mode)
     fuse_options = set(pyfuse3.default_options)
