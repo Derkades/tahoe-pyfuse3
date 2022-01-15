@@ -2,7 +2,8 @@
     "python.linting.pylintArgs": [
       "--disable=missing-class-docstring,missing-module-docstring",
       "--good-names=i,j,k,e,fh",
-      "--max-line-length=120"
+      "--max-line-length=120",
+      "--extension-pkg-whitelist=pyfuse3"
     ],
     "python.pythonPath": "venv/bin/python",
     "python.linting.pycodestyleEnabled": false,
