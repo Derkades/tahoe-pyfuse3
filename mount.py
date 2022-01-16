@@ -1,28 +1,26 @@
 #!/usr/bin/env python3
-import os
-import time
-import threading
+import argparse
+import base64
+import errno
+import json
 import logging
 import logging.handlers
-import base64
-import json
-import argparse
-import errno
+import os
 import stat
-from typing import Optional, List, Dict, Any, cast
-from urllib.parse import urlparse, quote
+import threading
+import time
 from multiprocessing.pool import ThreadPool
+from typing import Any, Dict, List, Optional, cast
+from urllib.parse import quote, urlparse
 
+import _pyfuse3  # for pyinstaller pylint: disable=unused-import
+import pyfuse3
+import trio
 import urllib3
-from urllib3.exceptions import HTTPError
+from pyfuse3 import FUSEError
 from urllib3 import HTTPConnectionPool, HTTPSConnectionPool
 from urllib3.connectionpool import ConnectionPool
-
-import pyfuse3
-import _pyfuse3  # for pyinstaller pylint: disable=unused-import
-from pyfuse3 import FUSEError
-import trio
-
+from urllib3.exceptions import HTTPError
 
 try:
     import faulthandler
@@ -474,7 +472,7 @@ class TahoeFs(pyfuse3.Operations):
             data = self._download_range(cap, r_start, r_end)
 
         duration = time.perf_counter() - start_time
-        throughput = (r_end - r_start) / (duration * 1024 * 1024)
+        throughput = len(data) / (duration * 1024 * 1024)
         log.debug('downloaded in %.1fs at %.1f Mb/s or %.1f MB/s', duration, throughput*8, throughput)
         return data
 
