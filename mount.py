@@ -681,10 +681,6 @@ def main() -> None:
         else:
             if opt == 'ro':
                 read_only = True
-            elif opt == 'noexec':
-                mode_exec = False
-            elif opt == 'exec':
-                mode_exec = True
             elif opt == 'allow_other':
                 allow_other = True
             elif opt == 'debug':
