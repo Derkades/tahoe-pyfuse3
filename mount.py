@@ -372,8 +372,8 @@ class TahoeFs(pyfuse3.Operations):
         else:
             raise NotImplementedError('unsupported mode: ' + oct(mode))
 
-    async def move(self, old_inode_p: int, old_name: str, new_inode_p: int, new_name: str,
-                   flags: int, _ctx: pyfuse3.RequestContext) -> None:
+    async def rename(self, parent_inode_old: int, name_old: str, parent_inode_new: int, name_new: str,
+                     flags: int, _ctx: pyfuse3.RequestContext) -> None:
         if flags & pyfuse3.RENAME_EXCHANGE == pyfuse3.RENAME_EXCHANGE:
             raise pyfuse3.FUSEError(errno.ENOTSUP)
 
@@ -382,17 +382,17 @@ class TahoeFs(pyfuse3.Operations):
         else:
             replace_mode = 'only-files'
 
-        old_pcap = self._inode_to_cap(old_inode_p)
-        new_pcap = self._inode_to_cap(new_inode_p)
+        old_pcap = self._inode_to_cap(parent_inode_old)
+        new_pcap = self._inode_to_cap(parent_inode_new)
         assert old_pcap
         assert new_pcap
 
         try:
             resp = self._get_connection_pool().request('POST',
                                                        '/uri' + quote(old_pcap) + '/?=relink'
-                                                       '&from_name=' + quote(old_name) +
+                                                       '&from_name=' + quote(name_old) +
                                                        '&to_dir=' + quote(new_pcap) +
-                                                       '&to_name=' + quote(new_name) +
+                                                       '&to_name=' + quote(name_new) +
                                                        '&replace=' + replace_mode)
         except HTTPError as e:
             log.warning('error during POST request for move(): %s', e)
@@ -665,19 +665,19 @@ def main() -> None:
 
     for opt in args.o.split(','):
         if '=' in opt:
-            (k, v) = opt.split('=')
-            if k == 'node_url':
-                node_url = v
-            elif k == 'setuid':
-                uid = v
-            elif k == 'setgid':
-                gid = v
-            elif k == 'file_mode':
-                file_mode = int(v, 8)
-            elif k == 'dir_mode':
-                dir_mode = int(v, 8)
+            (key, value) = opt.split('=')
+            if key == 'node_url':
+                node_url = value
+            elif key == 'setuid':
+                uid = value
+            elif key == 'setgid':
+                gid = value
+            elif key == 'file_mode':
+                file_mode = int(value, 8)
+            elif key == 'dir_mode':
+                dir_mode = int(value, 8)
             else:
-                print('Ignoring unsupported option:', k)
+                print('Ignoring unsupported option:', key)
         else:
             if opt == 'ro':
                 read_only = True
