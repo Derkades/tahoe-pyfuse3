@@ -100,10 +100,6 @@ class TahoeFs(pyfuse3.Operations):
                 pool_kwargs['port'] = parsed_url.port if parsed_url.port is not None else 443
                 pool = HTTPSConnectionPool(**pool_kwargs)
             self._connection_pools.append(pool)
-        try:
-            self._find_cap_in_parent(pyfuse3.ROOT_INODE, None)
-        except ValueError:
-            pass
 
     def _get_connection_pool(self) -> urllib3.connectionpool.ConnectionPool:
         pool = self._connection_pools[self._next_connection_pool_index]
@@ -156,14 +152,12 @@ class TahoeFs(pyfuse3.Operations):
         json2: Dict[str, Any] = child_json[1]
         return json2['rw_uri'] if 'rw_uri' in json2 else json2['ro_uri']
 
-    def _find_cap_in_parent(self, parent_inode: int, name: Optional[str]) -> str:
+    def _find_cap_in_parent(self, parent_inode: int, name: str) -> str:
         """
         Look up the file cap corresponding to a name in a parent directory.
         Parameters
             parent_inode: Inode of the parent directory. Raises FUSEError(errno.ENOTDIR) if it's not a directory.
-            name: Name of the file/directory to look for. If None, this method makes the an HTTP request but doesn't
-                  attempt to find the name in the given directory. name=None is used once at startup to initialize the
-                  inode cap map with the root directory.
+            name: Name of the file/directory to look for.
         Returns
             Capability. Raises FUSEError(errno.ENOENT) if the file was not found.
         """
@@ -188,10 +182,6 @@ class TahoeFs(pyfuse3.Operations):
             raise FUSEError(errno.EREMOTEIO)
 
         r_json = json.loads(resp.data.decode())
-
-        if name is None:
-            # this function is called with name=None once at startup to init the root directory
-            raise ValueError("name is None")
 
         for child_name in r_json[1]['children'].keys():
             if child_name == name:
